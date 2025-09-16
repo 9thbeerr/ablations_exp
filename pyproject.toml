@@ -1,0 +1,12 @@
+[project]
+name = "albations"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.3.3",
+    "tokenizers>=0.22.0",
+    "torch>=2.8.0",
+    "wandb>=0.21.4",
+]
