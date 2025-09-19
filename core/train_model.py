@@ -216,8 +216,9 @@ if __name__ == "__main__":
             print(f"Validation Loss at step: {step} | {val_loss.item()}")
 
             ## Generation of Text
-            input_prompt = "A magazine supplement with"
-            generate_with_temperature(0.8, tokenizer, model, input_prompt, 10)
+            input_prompts_random = ["A magazine supplement with", "Once upon a time", "Beautiful city of", "in shadows of dark valley", "tree was big enough"]
+
+            generate_with_temperature(0.8, tokenizer, model, np.random.choice(input_prompts_random), 10)
             model.train()
 
         step = step + 1
