@@ -12,3 +12,4 @@ raw_data
 processed_data
 checkpoints
 wandb
+.DS_Store
