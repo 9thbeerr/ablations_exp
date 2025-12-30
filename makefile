@@ -2,7 +2,7 @@
 PYTHON=python
 
 # === General Model Settings ===
-MODEL_NAME=tinystoriesv2-gpt
+MODEL_NAME=synth
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 
@@ -55,7 +55,7 @@ WARMUP_ITERS=1000
 COSINE_CYCLE_ITERS=8000
 MAX_L2_NORM=1.0
 MODE=train
-WANDB_RUN_ID=fearless-flower-22
+WANDB_RUN_ID=test_synth
 
 train_model:
 	$(PYTHON) -m core.train_model \

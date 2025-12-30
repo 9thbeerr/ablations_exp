@@ -5,74 +5,135 @@ import numpy as np
 import os
 from pathlib import Path
 import struct
+import pandas as pd
 
-# Data / Paths
+
+def read_file_content(file_path):
+    """Read content from various file formats."""
+    ext = file_path.suffix.lower()
+
+    if ext == ".txt":
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    elif ext == ".parquet":
+        df = pd.read_parquet(file_path)
+        # Concatenate all text columns or specific column
+        text_cols = df.select_dtypes(include=["object"]).columns
+        return "\n".join(
+            df[text_cols].apply(lambda x: " ".join(x.dropna().astype(str)), axis=1)
+        )
+
+    elif ext == ".csv":
+        df = pd.read_csv(file_path)
+        text_cols = df.select_dtypes(include=["object"]).columns
+        return "\n".join(
+            df[text_cols].apply(lambda x: " ".join(x.dropna().astype(str)), axis=1)
+        )
+
+    elif ext == ".jsonl":
+        import json
+
+        texts = []
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                data = json.loads(line)
+                texts.append(str(data))
+        return "\n".join(texts)
+
+    return ""
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
     parser.add_argument("--vocab_size", type=int, default=1024)
     parser.add_argument("--max_seq_len", type=int, default=256)
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--train_tokenizer", action="store_true")
-
     args = parser.parse_args()
     print(args)
 
-    model_name = args.model_name  ## tineystoriesv2-gpt
+    model_name = args.model_name
     root_path = Path(os.getcwd())
     data_dir = root_path / model_name
+    train_tokenizer = args.train_tokenizer
 
-    train_tokenizer = True if args.train_tokenizer else False
+    # Auto-detect file extensions from directory
+    supported_extensions = {".txt", ".parquet", ".csv", ".jsonl"}
+    raw_data_path = Path(data_dir, "raw_data")
 
-    ## this will get all text file from raw_data/train and valid to train a tokenizer.
-    training_filename_list = [
-        str(f.relative_to(root_path))
-        for f in Path(data_dir, "raw_data").rglob("*.txt")
-        if f.is_file()
-    ]
+    found_extensions = set()
+    for f in raw_data_path.rglob("*"):
+        if f.is_file() and f.suffix.lower() in supported_extensions:
+            found_extensions.add(f.suffix.lower())
+
+    print(f"Auto-detected extensions: {found_extensions}")
+
+    # Get all files with detected extensions
+    training_filename_list = []
+    for ext in found_extensions:
+        files = [
+            str(f.relative_to(root_path))
+            for f in raw_data_path.rglob(f"*{ext}")
+            if f.is_file()
+        ]
+        training_filename_list.extend(files)
 
     checkpoints = root_path / "checkpoints" / model_name
-    if not checkpoints.exists():
-        checkpoints.mkdir(parents=True)
-
+    checkpoints.mkdir(parents=True, exist_ok=True)
     tokenizer_path = checkpoints / f"tokenizer_{model_name}.json"
 
     if train_tokenizer:
-        print("Training a BPETokenizer with files:", training_filename_list)
+        print(f"Training BPETokenizer with {len(training_filename_list)} files")
+
+        # Create temp txt files for tokenizer training
+        temp_dir = checkpoints / "temp_txt"
+        temp_dir.mkdir(exist_ok=True)
+        temp_files = []
+
+        for i, file_path in enumerate(training_filename_list):
+            content = read_file_content(Path(file_path))
+            temp_file = temp_dir / f"temp_{i}.txt"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(content)
+            temp_files.append(str(temp_file))
 
         bpe_tokenizer = ByteLevelBPETokenizer()
         bpe_tokenizer.train(
-            files=training_filename_list,
+            files=temp_files,
             vocab_size=args.vocab_size,
             min_frequency=4,
             special_tokens=["<UNK>", "<|endoftext|>"],
         )
         bpe_tokenizer.save(str(tokenizer_path))
 
+        # Cleanup temp files
+        for tf in temp_files:
+            os.remove(tf)
+        temp_dir.rmdir()
+
     else:
-        print("Starting Tokenization of Training data..")
+        print("Starting tokenization...")
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
         for mode in ["train", "valid"]:
             processed_data_dir = data_dir / "processed_data" / mode
-            if not processed_data_dir.exists():
-                processed_data_dir.mkdir(parents=True)
+            processed_data_dir.mkdir(parents=True, exist_ok=True)
 
             tokenized_data_bin_path = processed_data_dir / f"{mode}.bin"
             tokenized_data_idx_path = processed_data_dir / f"{mode}.idx"
 
-            ## this will get all text file for tokenization.
+            # Auto-detect files to tokenize
+            mode_path = Path(data_dir, "raw_data", mode)
+            tokenize_filename_list = []
 
-            tokenize_filename_list = [
-                str(f.relative_to(root_path))
-                for f in Path(data_dir, "raw_data", mode).rglob("*")
-                if f.is_file()
-            ]
+            for ext in found_extensions:
+                files = [f for f in mode_path.rglob(f"*{ext}") if f.is_file()]
+                tokenize_filename_list.extend(files)
 
-            print("List file to tokenize:", tokenize_filename_list)
+            print(f"Tokenizing {len(tokenize_filename_list)} files for {mode}")
 
             chunk_size = args.max_seq_len * 1024 * 256
             doc_offsets = []
@@ -81,24 +142,24 @@ if __name__ == "__main__":
 
             with open(tokenized_data_bin_path, "wb") as out_file:
                 for raw_data_file in tokenize_filename_list:
-                    with open(raw_data_file, "r", encoding="utf-8") as f:
-                        while True:
-                            text_chunk = f.read(chunk_size)
-                            if not text_chunk:
-                                break
+                    content = read_file_content(raw_data_file)
 
-                            token_ids = tokenizer.encode(text_chunk).ids
-                            token_arr = np.array(token_ids, dtype=np.uint16)
-                            out_file.write(token_arr.tobytes())
+                    # Process in chunks
+                    for i in range(0, len(content), chunk_size):
+                        text_chunk = content[i : i + chunk_size]
+                        if not text_chunk:
+                            break
 
-                            doc_offsets.append((total_tokens, len(token_ids)))
-                            total_tokens = total_tokens + len(token_ids)
-                            chunk_count += 1
-                            print(
-                                f"Chunks written: {chunk_count}, Tokens so far: {total_tokens}"
-                            )
+                        token_ids = tokenizer.encode(text_chunk).ids
+                        token_arr = np.array(token_ids, dtype=np.uint16)
+                        out_file.write(token_arr.tobytes())
+
+                        doc_offsets.append((total_tokens, len(token_ids)))
+                        total_tokens += len(token_ids)
+                        chunk_count += 1
+                        print(f"Chunks: {chunk_count}, Tokens: {total_tokens}")
 
             with open(tokenized_data_idx_path, "wb") as f:
-                f.write(struct.pack("<Q", len(doc_offsets)))  # number of documents
+                f.write(struct.pack("<Q", len(doc_offsets)))
                 for offset, length in doc_offsets:
                     f.write(struct.pack("<QQ", offset, length))
