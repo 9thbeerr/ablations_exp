@@ -12,4 +12,9 @@ raw_data
 processed_data
 checkpoints
 wandb
+fineweb
+synth
+fineweb2
+fineweb10B
+tinystoriesv2-gpt
 .DS_Store
