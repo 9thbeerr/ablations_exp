@@ -1,48 +1,42 @@
 import os
 import sys
+import shutil
 from huggingface_hub import hf_hub_download
-
-# Download FineWeb-Edu 10BT Parquet chunks from Hugging Face
-
-
-# def get(fname):
-#     local_dir = os.path.join(os.path.dirname(__file__), "fineweb10B")
-#     os.makedirs(local_dir, exist_ok=True)
-#     local_path = os.path.join(local_dir, fname)
-
-
-#     if not os.path.exists(local_path):
-#         hf_hub_download(
-#             repo_id="HuggingFaceFW/fineweb-edu",
-#             filename=f"sample/10BT/{fname}",
-#             repo_type="dataset",
-#             local_dir=local_dir,
-#         )
 
 
 def get(fname):
-    local_dir = os.path.join(os.path.dirname(__file__), "fineweb10B")
+    local_dir = os.path.join(os.path.dirname(__file__), "fineweb10BT", "raw_data")
     subpath = os.path.join("sample", "10BT", fname)
-    local_path = os.path.join(local_dir, subpath)
 
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    # Create raw_data directory
+    os.makedirs(local_dir, exist_ok=True)
 
-    if not os.path.exists(local_path):
-        hf_hub_download(
+    final_path = os.path.join(local_dir, fname)
+
+    if not os.path.exists(final_path):
+        # Download to temp location (will create sample/10BT structure)
+        downloaded_path = hf_hub_download(
             repo_id="HuggingFaceFW/fineweb-edu",
             filename=subpath,
             repo_type="dataset",
-            local_dir=local_dir,
+            cache_dir=None,
         )
+        # Move to raw_data/ directly
+        shutil.copy2(downloaded_path, final_path)
+        print(f"Downloaded: {fname}")
+    else:
+        print(f"Already exists: {fname}")
 
 
-# Default number of chunks to download (can override via CLI argument)
-chunk_no = 15  # adjust based on how many parquet files exist
+# Default number of chunks
+chunk_no = 15
 if len(sys.argv) >= 2:
     chunk_no = int(sys.argv[1])
 
-# Download files like 000_00000.parquet, 000_00001.parquet, ...
+# Download files
 for i in range(chunk_no):
     fname = f"{i:03d}_00000.parquet"
-    print("Downloading fiile:", fname)
+    print(f"Downloading file {i + 1}/{chunk_no}: {fname}")
     get(fname)
+
+print("Download complete!")
