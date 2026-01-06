@@ -2,7 +2,7 @@
 PYTHON=python
 
 # === General Model Settings ===
-MODEL_NAME=synth
+MODEL_NAME=finewebedu10b
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 
@@ -12,35 +12,12 @@ MAX_SEQ_LEN=256
 # === Generate ===
 TEMPERATURE=0.8
 INPUT_PROMPT="Hello world, "
-GEN_MAX_SEQ_LEN=10
-WANDB_ID=None
-
-generate:
-	$(PYTHON) -m core.generate \
-		--temperature $(TEMPERATURE) \
-		--input_prompt $(INPUT_PROMPT) \
-		--max_seq_len $(GEN_MAX_SEQ_LEN) \
-		--model_name $(MODEL_NAME) \
-		--wandb_id $(WANDB_ID)
-
-# === Tokenizer ===
-train_tokenizer:
-	$(PYTHON) -m core.tokenization \
-		--vocab_size $(VOCAB_SIZE) \
-		--max_seq_len $(MAX_SEQ_LEN) \
-		--model_name $(MODEL_NAME) \
-		--train_tokenizer
-
-run_tokenizer:
-	$(PYTHON) -m core.tokenization \
-		--vocab_size $(VOCAB_SIZE) \
-		--max_seq_len $(MAX_SEQ_LEN) \
-		--model_name $(MODEL_NAME)
+GEN_MAX_SEQ_LEN=256
 
 # === Training ===
-D_MODEL=384
-NUM_LAYERS=6
-NUM_HEADS=6
+D_MODEL=1024
+NUM_LAYERS=16
+NUM_HEADS=8
 D_FF=1536
 ROPE_THETA=10000
 NUM_STEPS=5000
@@ -54,11 +31,36 @@ LR_MIN=6e-5
 WARMUP_ITERS=1000
 COSINE_CYCLE_ITERS=8000
 MAX_L2_NORM=1.0
+USE_GRADIENT_CHECKPOINT=True
+BATCH_SIZE=4
 MODE=train
-WANDB_RUN_ID=test_synth
+WANDB_RUN_ID=
+### latest model to use to resume
+
+generate:
+	uv run -m core.generate \
+		--temperature $(TEMPERATURE) \
+		--input_prompt $(INPUT_PROMPT) \
+		--max_seq_len $(GEN_MAX_SEQ_LEN) \
+		--model_name $(MODEL_NAME) \
+		--wandb_id $(WANDB_RUN_ID)
+
+# === Tokenizer ===
+train_tokenizer:
+	uv run -m core.tokenization \
+		--vocab_size $(VOCAB_SIZE) \
+		--max_seq_len $(MAX_SEQ_LEN) \
+		--model_name $(MODEL_NAME) \
+		--train_tokenizer
+
+run_tokenizer:
+	uv run -m core.tokenization \
+		--vocab_size $(VOCAB_SIZE) \
+		--max_seq_len $(MAX_SEQ_LEN) \
+		--model_name $(MODEL_NAME)
 
 train_model:
-	$(PYTHON) -m core.train_model \
+	uv run -m core.train_model \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--d_model $(D_MODEL) \
@@ -74,6 +76,7 @@ train_model:
 		--weight_decay $(WEIGHT_DECAY) \
 		--lr_max $(LR_MAX) \
 		--lr_min $(LR_MIN) \
+		--use_gradient_checkpoint $(USE_GRADIENT_CHECKPOINT) \
 		--warmup_iters $(WARMUP_ITERS) \
 		--cosine_cycle_iters $(COSINE_CYCLE_ITERS) \
 		--max_l2_norm $(MAX_L2_NORM) \
@@ -81,7 +84,7 @@ train_model:
 		--model_name $(MODEL_NAME)
 
 resume_train_model:
-	$(PYTHON) -m core.train_model \
+	uv run -m core.train_model \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--d_model $(D_MODEL) \
@@ -97,6 +100,7 @@ resume_train_model:
 		--weight_decay $(WEIGHT_DECAY) \
 		--lr_max $(LR_MAX) \
 		--lr_min $(LR_MIN) \
+		--use_gradient_checkpoint $(USE_GRADIENT_CHECKPOINT) \
 		--warmup_iters $(WARMUP_ITERS) \
 		--cosine_cycle_iters $(COSINE_CYCLE_ITERS) \
 		--max_l2_norm $(MAX_L2_NORM) \

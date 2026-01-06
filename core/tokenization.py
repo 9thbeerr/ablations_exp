@@ -6,6 +6,51 @@ import os
 from pathlib import Path
 import struct
 import pandas as pd
+import pyarrow.parquet as pq
+
+
+def read_parquet_content(file_path):
+    """
+    Memory-efficient parquet reader that streams and yields text.
+    Reads only the 'text' column.
+    """
+    parquet_file = pq.ParquetFile(file_path)
+
+    # Use only 'text' column
+    if "text" not in parquet_file.schema.names:
+        raise ValueError("Column 'text' not found in parquet file")
+
+    result_lines = []
+
+    # Process each row group (natural chunks in parquet)
+    for row_group_idx in range(parquet_file.num_row_groups):
+        table = parquet_file.read_row_group(row_group_idx, columns=["text"])
+
+        # Process rows in this group
+        for i in range(table.num_rows):
+            val = table["text"][i].as_py()
+            if val:  # Skip None/null values
+                result_lines.append(str(val))
+
+        # Yield periodically to avoid memory buildup
+        if len(result_lines) >= 10000:
+            yield "\n".join(result_lines)
+            result_lines = []
+
+    # Yield remaining lines
+    if result_lines:
+        yield "\n".join(result_lines)
+
+
+# Usage example - to get all text at once:
+def read_parquet_all_text(file_path):
+    """If you need all text at once (use carefully with large files)"""
+    return "\n".join(read_parquet_content(file_path))
+
+
+# Usage example - streaming:
+# for chunk in read_parquet_content("data.parquet"):
+#     process(chunk)
 
 
 def read_file_content(file_path):
@@ -17,12 +62,7 @@ def read_file_content(file_path):
             return f.read()
 
     elif ext == ".parquet":
-        df = pd.read_parquet(file_path)
-        # Concatenate all text columns or specific column
-        text_cols = df.select_dtypes(include=["object"]).columns
-        return "\n".join(
-            df[text_cols].apply(lambda x: " ".join(x.dropna().astype(str)), axis=1)
-        )
+        return read_parquet_all_text(file_path)
 
     elif ext == ".csv":
         df = pd.read_csv(file_path)
@@ -96,9 +136,13 @@ if __name__ == "__main__":
         for i, file_path in enumerate(training_filename_list):
             content = read_file_content(Path(file_path))
             temp_file = temp_dir / f"temp_{i}.txt"
+            print(len(content))
             with open(temp_file, "w", encoding="utf-8") as f:
                 f.write(content)
+            print(content[:-1][:200])
+            del content
             temp_files.append(str(temp_file))
+            print("temp file locations with .txt", temp_files)
 
         bpe_tokenizer = ByteLevelBPETokenizer()
         bpe_tokenizer.train(
