@@ -2,7 +2,7 @@
 PYTHON=python
 
 # === General Model Settings ===
-MODEL_NAME=finewebedu10b
+MODEL_NAME=finewebedu10bt
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 

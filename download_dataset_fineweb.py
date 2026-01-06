@@ -5,7 +5,7 @@ from huggingface_hub import hf_hub_download
 
 
 def get(fname):
-    local_dir = os.path.join(os.path.dirname(__file__), "fineweb10BT", "raw_data")
+    local_dir = os.path.join(os.path.dirname(__file__), "finewebedu10bt", "raw_data")
     subpath = os.path.join("sample", "10BT", fname)
 
     # Create raw_data directory
@@ -29,7 +29,7 @@ def get(fname):
 
 
 # Default number of chunks
-chunk_no = 15
+chunk_no = 14
 if len(sys.argv) >= 2:
     chunk_no = int(sys.argv[1])
 
