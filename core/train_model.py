@@ -56,6 +56,7 @@ def get_args():
     # Data / Paths
     parser.add_argument("--mode", type=str, default="valid")
     parser.add_argument("--model_name", type=str, required=True)
+    parser.add_argument("--device", type=str, required=True, default="mps")
 
     resume_group = parser.add_argument_group("Resume Training Options")
     resume_group.add_argument(
@@ -104,6 +105,7 @@ if __name__ == "__main__":
             "cosine_cycle_iters": args.cosine_cycle_iters,
             # Gradient Clipping
             "max_l2_norm": args.max_l2_norm,
+            "device": args.device,
         },
     )
 
@@ -145,7 +147,7 @@ if __name__ == "__main__":
         "d_ff": args.d_ff,
         "use_gradient_checkpoint": args.use_gradient_checkpoint,
         "rope_theta": args.rope_theta,
-        "device": "mps",
+        "device": args.device,
     }
 
     hyperparameters = {
