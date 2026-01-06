@@ -9,6 +9,7 @@ dependencies = [
     "hf-transfer>=0.1.9",
     "huggingface-hub>=0.34.4",
     "numpy>=2.3.3",
+    "psutil>=7.2.1",
     "tokenizers>=0.22.0",
     "torch>=2.8.0",
     "wandb>=0.21.4",
