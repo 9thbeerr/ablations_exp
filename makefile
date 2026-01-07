@@ -53,7 +53,6 @@ train_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
-		--device $(DEVICE) \
 		--train_tokenizer
 
 run_tokenizer:
@@ -61,7 +60,6 @@ run_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
-		--device $(DEVICE)
 
 train_model:
 	uv run -m core.train_model \
