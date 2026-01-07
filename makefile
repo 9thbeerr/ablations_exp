@@ -34,6 +34,7 @@ MAX_L2_NORM=5.0
 USE_GRADIENT_CHECKPOINT=True
 BATCH_SIZE=4
 MODE=train
+DEVICE=mps
 WANDB_RUN_ID=
 ### latest model to use to resume
 
@@ -43,7 +44,8 @@ generate:
 		--input_prompt $(INPUT_PROMPT) \
 		--max_seq_len $(GEN_MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
-		--wandb_id $(WANDB_RUN_ID)
+		--wandb_id $(WANDB_RUN_ID) \
+		--device $(DEVICE)
 
 # === Tokenizer ===
 train_tokenizer:
@@ -51,13 +53,15 @@ train_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
+		--device $(DEVICE)
 		--train_tokenizer
 
 run_tokenizer:
 	uv run -m core.tokenization \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
-		--model_name $(MODEL_NAME)
+		--model_name $(MODEL_NAME) \
+		--device $(DEVICE)
 
 train_model:
 	uv run -m core.train_model \
@@ -81,7 +85,8 @@ train_model:
 		--cosine_cycle_iters $(COSINE_CYCLE_ITERS) \
 		--max_l2_norm $(MAX_L2_NORM) \
 		--mode $(MODE) \
-		--model_name $(MODEL_NAME)
+		--model_name $(MODEL_NAME) \
+		--device $(DEVICE)
 
 resume_train_model:
 	uv run -m core.train_model \
@@ -107,4 +112,5 @@ resume_train_model:
 		--mode $(MODE) \
 		--model_name $(MODEL_NAME) \
 		--train_resume \
-		--wandb_run_id $(WANDB_RUN_ID)
+		--wandb_run_id $(WANDB_RUN_ID) \
+		--device $(DEVICE)
