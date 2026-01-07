@@ -53,7 +53,7 @@ train_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
-		--device $(DEVICE)
+		--device $(DEVICE) \
 		--train_tokenizer
 
 run_tokenizer:
