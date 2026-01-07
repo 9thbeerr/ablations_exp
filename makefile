@@ -36,6 +36,7 @@ BATCH_SIZE=4
 MODE=train
 DEVICE=mps
 WANDB_RUN_ID=
+NUM_WORKERS=2
 ### latest model to use to resume
 
 generate:
@@ -53,12 +54,14 @@ train_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--model_name $(MODEL_NAME) \
+		--num_workers $(NUM_WORKERS) \
 		--train_tokenizer
 
 run_tokenizer:
 	uv run -m core.tokenization \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
+		--num_workers $(NUM_WORKERS) \
 		--model_name $(MODEL_NAME) \
 
 train_model:
