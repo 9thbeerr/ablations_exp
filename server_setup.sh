@@ -7,7 +7,7 @@ export TOKENIZERS_PARALLELISM=true
 export WANDB_API_KEY="${WANDB_API_KEY:-aklsjdfl}"
 
 # Model Settings
-MODEL_NAME=finewebedu10bt
+MODEL_NAME=tinystories
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 
@@ -47,7 +47,7 @@ setup() {
 }
 
 download_dataset() {
-    uv run download_dataset_fineweb.py
+    uv run download_dataset_${MODEL_NAME}.py
 }
 
 generate() {
