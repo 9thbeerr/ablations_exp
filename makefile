@@ -5,7 +5,7 @@ export WANDB_API_KEY ?= $(shell echo $$WANDB_API_KEY)
 # === Shared Settings ===
 PYTHON=python
 # === General Model Settings ===
-MODEL_NAME=finewebedu10bt
+MODEL_NAME=tinystories
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 # === Make Targets ===
