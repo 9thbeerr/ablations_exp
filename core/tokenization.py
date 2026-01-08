@@ -191,7 +191,7 @@ def get_available_memory():
 def get_max_batch_size():
     """Calculate max batch size based on available memory"""
     available_gb = get_available_memory()
-    usable_gb = available_gb * 0.7  # Use 70% of available memory
+    usable_gb = available_gb * 0.5  # Use 70% of available memory
 
     # Estimate: 1GB can hold ~150 text chunks (5MB each)
     max_chunks = int(usable_gb * 150)
