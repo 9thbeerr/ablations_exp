@@ -40,6 +40,7 @@ def generate_next_tokens_batch(
     model: torch.nn.Module,
     prompts: list[str],
     max_seq_len: int,
+    device: str
 ):
     # Encode all prompts
     encoded = [tokenizer.encode(p).ids for p in prompts]
@@ -96,7 +97,7 @@ if __name__ == "__main__":
 
     root_path = Path(os.getcwd())
     tokenizer_path = (
-        root_path / "checkpoints" / model_name / f"tokenizer_{model_name}.json"
+        root_path / "checkpoints" / model_name / f"tokenizer.json"
     )
 
     model_checkpoint = (

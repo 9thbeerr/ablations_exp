@@ -80,7 +80,7 @@ run_tokenizer() {
 train_model() {
     local RESUME=""
     if [ "$1" = "resume" ]; then
-        RESUME="--train_resume --wandb_run_id $WANDB_RUN_ID"
+        RESUME="--train_resume --wandb_run_id ${2:-$WANDB_RUN_ID}"
     fi
     
     uv run -m core.train_model \
@@ -134,7 +134,14 @@ case "${1:-help}" in
     train-tokenizer) train_tokenizer ;;
     run-tokenizer) run_tokenizer ;;
     train) train_model ;;
-    resume) train_model resume ;;
+    resume) 
+        if [ -z "$2" ]; then
+            echo "Error: WANDB_RUN_ID required"
+            echo "Usage: $0 resume <wandb_run_id>"
+            exit 1
+        fi
+        train_model resume "$2" 
+        ;;
     init) init ;;
     build-tokenizer) build_tokenizer ;;
     train-pipeline) train_pipeline ;;

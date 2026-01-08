@@ -17,9 +17,11 @@ from tokenizers import ByteLevelBPETokenizer, Tokenizer
 
 def memory_config():
     avail = psutil.virtual_memory().available
-    budget = int(avail * 0.25)  # use 25% of free RAM
+    budget = int(avail * 0.60)  # use 25% of free RAM
 
     chunk_bytes = min(budget // 4, 32 * 1024 * 1024)
+
+
     batch_limit = min(max(chunk_bytes // (512 * 1024), 8), 64)
 
     return max(chunk_bytes, 4 * 1024 * 1024), batch_limit
@@ -92,76 +94,95 @@ def stream_text(path, target_bytes):
 
 def train_tokenizer(files, vocab_size, out_path):
     tokenizer = ByteLevelBPETokenizer()
-    tokenizer.train(
-        files=[str(f) for f in files],
+
+    chunk_bytes, _ = memory_config()
+
+    def text_iterator():
+        for f in files:
+            for chunk in stream_text(f, chunk_bytes):
+                for text in chunk:
+                    yield text
+
+    tokenizer.train_from_iterator(
+        text_iterator(),
         vocab_size=vocab_size,
         min_frequency=4,
         special_tokens=["<UNK>", "<|endoftext|>"],
     )
-    tokenizer.save(str(out_path))
 
+    tokenizer.save(str(out_path))
 
 # =========================
 # Worker: tokenize only
 # =========================
 
-
 def tokenize_worker(files, tokenizer_path, max_seq_len, queue):
     chunk_bytes, batch_limit = memory_config()
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
+    token_buffer = []
+
     for f in files:
         for chunk in stream_text(f, chunk_bytes):
-            batch = []
-            for t in chunk:
-                batch.append(t)
-                if len(batch) >= batch_limit:
-                    encs = tokenizer.encode_batch(batch)
-                    for e in encs:
-                        ids = e.ids[:max_seq_len]
-                        if ids:
-                            queue.put(ids)
-                    batch = []
+            encs = tokenizer.encode_batch(chunk)
 
-            if batch:
-                encs = tokenizer.encode_batch(batch)
-                for e in encs:
-                    ids = e.ids[:max_seq_len]
-                    if ids:
-                        queue.put(ids)
+            for e in encs:
+                token_buffer.extend(e.ids)
 
-    queue.put(None)  # signal done
+                while len(token_buffer) >= max_seq_len:
+                    seq = token_buffer[:max_seq_len]
+                    token_buffer = token_buffer[max_seq_len:]
+                    queue.put(seq)
+
+    # drop remainder (or pad if you want)
+    queue.put(None)
 
 
 # =========================
 # Writer: single owner of disk
 # =========================
 
-
 def writer_process(bin_path, idx_path, queue, num_workers, split_name):
     total_tokens = 0
-    offsets = []
+    total_seqs = 0
     finished = 0
+
+    last_report = 0
 
     with open(bin_path, "wb", buffering=16 * 1024 * 1024) as bf:
         while finished < num_workers:
             item = queue.get()
+
             if item is None:
                 finished += 1
+                print(f"[{split_name}] worker finished ({finished}/{num_workers})")
                 continue
 
             arr = np.asarray(item, dtype=np.uint32)
             bf.write(arr.tobytes())
-            offsets.append((total_tokens, len(arr)))
             total_tokens += len(arr)
+            total_seqs += 1
+
+            # progress every 10k sequences
+            if total_seqs - last_report >= 10_000:
+                last_report = total_seqs
+                print(
+                    f"[{split_name}] "
+                    f"{total_seqs:,} seqs | "
+                    f"{total_tokens:,} tokens"
+                )
+
+    print(
+        f"[{split_name}] DONE — "
+        f"{total_seqs:,} seqs | {total_tokens:,} tokens"
+    )
 
     with open(idx_path, "wb") as f:
-        f.write(struct.pack("<Q", len(offsets)))
-        for off, ln in offsets:
-            f.write(struct.pack("<QQ", off, ln))
-
-    print(f"✓ {split_name}: {total_tokens:,} tokens written")
-
+        f.write(struct.pack("<Q", total_seqs))
+        offset = 0
+        for _ in range(total_seqs):
+            f.write(struct.pack("<QQ", offset, len(arr)))
+            offset += len(arr)
 
 # =========================
 # Tokenize one split

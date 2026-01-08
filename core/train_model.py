@@ -120,7 +120,7 @@ if __name__ == "__main__":
     # to check if checkpoint exists and run from there or error for no dir found nor model found
     model_checkpoint_path = checkpoint_dir / model_name / f"{model_run}.pt"
 
-    tokenizer_path = checkpoint_dir / model_name / f"tokenizer_{model_name}.json"
+    tokenizer_path = checkpoint_dir / model_name / f"tokenizer.json"
 
     processed_data_dir = root_path / model_name / "processed_data"
 
@@ -183,11 +183,11 @@ if __name__ == "__main__":
     # tokenized_data = np.memmap(str(train_dataset_path), dtype=np.int64, mode="r")
 
     train_tokenized_dataset = MegatronDataset(
-        str(train_dataset_bin_path), str(train_dataset_idx_path)
+        str(train_dataset_bin_path), args.max_seq_len
     )
 
     valid_tokenized_dataset = MegatronDataset(
-        str(valid_dataset_bin_path), str(valid_dataset_idx_path)
+        str(valid_dataset_bin_path), args.max_seq_len
     )
 
     model = TransformerLM(**model_config)
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     while step < args.num_steps:
         # (x , y) = get_batches(tokenized_data, 32, args.max_seq_len, "cpu")
         (x, y) = train_tokenized_dataset.get_batch(
-            args.batch_size, args.max_seq_len, "cpu"
+            args.batch_size, "cpu"
         )
 
         logits = model(x)
@@ -266,7 +266,7 @@ if __name__ == "__main__":
             # (x_val , y_val) = get_batches(tokenized_valid_data, 32, args.max_seq_len, "cpu")
 
             (x_val, y_val) = valid_tokenized_dataset.get_batch(
-                args.batch_size, args.max_seq_len, "cpu"
+                args.batch_size, "cpu"
             )
 
             model.eval()
@@ -296,8 +296,7 @@ if __name__ == "__main__":
                 "Explain why learning is important.",
             ]
 
-            generate_next_tokens_batch(0.8, tokenizer, model, eval_prompts, 64)
-            torch.mps.empty_cache()
+            generate_next_tokens_batch(0.8, tokenizer, model, eval_prompts, 64, device="cuda")
 
             model.train()
 

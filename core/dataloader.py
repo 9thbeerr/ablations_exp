@@ -1,46 +1,36 @@
 import numpy as np
 import torch
-import struct
-from typing import Tuple, List
+from typing import Tuple
 
 
 class MegatronDataset:
-    def __init__(self, bin_path: str, idx_path: str, dtype=np.uint16):
+    def __init__(self, bin_path: str, context_length: int, dtype=np.uint32):
+        self.context_length = context_length
         self.tokens = np.memmap(bin_path, dtype=dtype, mode="r")
-        self.doc_offsets = self._load_index(idx_path)
-        self.total_docs = len(self.doc_offsets)
 
-    def _load_index(self, idx_path: str) -> List[Tuple[int, int]]:
-        with open(idx_path, "rb") as f:
-            doc_count = struct.unpack("<Q", f.read(8))[0]
-            return [struct.unpack("<QQ", f.read(16)) for _ in range(doc_count)]
+        # Number of full sequences available
+        self.num_samples = len(self.tokens) // context_length
 
-    def get_batch(self, batch_size: int, context_length: int, device: str) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_list = []
-        y_list = []
+    def get_batch(
+        self,
+        batch_size: int,
+        device: str,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-        attempts = 0
-        while len(x_list) < batch_size and attempts < batch_size * 4:
-            # Random document
-            doc_id = np.random.randint(0, self.total_docs)
-            offset, length = self.doc_offsets[doc_id]
+        # Random sample indices
+        idxs = np.random.randint(0, self.num_samples, size=batch_size)
 
-            if length <= context_length:
-                attempts += 1
-                continue  # Skip short docs
+        x = np.empty((batch_size, self.context_length), dtype=np.int64)
+        y = np.empty((batch_size, self.context_length), dtype=np.int64)
 
-            # Random start inside doc
-            max_start = length - context_length - 1
-            start = np.random.randint(0, max_start)
-            idx = offset + start
+        for i, idx in enumerate(idxs):
+            start = idx * self.context_length
+            end = start + self.context_length
 
-            x = self.tokens[idx:idx + context_length]
-            y = self.tokens[idx + 1:idx + 1 + context_length]
+            x[i] = self.tokens[start:end]
+            y[i] = self.tokens[start + 1 : end + 1]
 
-            x_list.append(np.array(x, copy=False))
-            y_list.append(np.array(y, copy=False))
-
-        x_batch = torch.tensor(np.stack(x_list), dtype=torch.long, device=device)
-        y_batch = torch.tensor(np.stack(y_list), dtype=torch.long, device=device)
-
-        return x_batch, y_batch
+        return (
+            torch.from_numpy(x).to(device),
+            torch.from_numpy(y).to(device),
+        )
