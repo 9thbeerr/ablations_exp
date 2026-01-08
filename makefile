@@ -1,32 +1,16 @@
 # === Shared Settings ===
 PYTHON=python
-
 # === General Model Settings ===
 MODEL_NAME=finewebedu10bt
 VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
-
 # === Make Targets ===
-.PHONY: generate train_tokenizer run_tokenizer train_model resume_train_model setup download_dataset
-
+.PHONY: generate train_tokenizer run_tokenizer train_model resume_train_model setup download_dataset init build_tokenizer train_pipeline
 WANDB_API_KEY=aklsjdfl
-
-setup:
-	export WANDB_API_KEY=$(WANDB_API_KEY) && \
-	pip install uv && \
-	uv venv --python 3.13 && \
-	. .venv/bin/activate && \
-	export TOKENIZERS_PARALLELISM=true && \
-	uv run
-
-download_dataset:
-	uv run download_dataset_fineweb.py
-
 # === Generate ===
 TEMPERATURE=0.8
 INPUT_PROMPT="Hello world, "
 GEN_MAX_SEQ_LEN=256
-
 # === Training ===
 D_MODEL=1024
 NUM_LAYERS=12
@@ -50,7 +34,16 @@ MODE=train
 DEVICE=mps
 WANDB_RUN_ID=
 NUM_WORKERS ?= $(shell python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
-### latest model to use to resume
+
+setup:
+	pip install uv && \
+	uv venv --python 3.13 && \
+	export TOKENIZERS_PARALLELISM=true && \
+	export WANDB_API_KEY=$(WANDB_API_KEY) && \
+	uv run
+
+download_dataset:
+	uv run download_dataset_fineweb.py
 
 generate:
 	uv run -m core.generate \
@@ -61,7 +54,6 @@ generate:
 		--wandb_id $(WANDB_RUN_ID) \
 		--device $(DEVICE)
 
-# === Tokenizer ===
 train_tokenizer:
 	uv run -m core.tokenization \
 		--vocab_size $(VOCAB_SIZE) \
@@ -75,7 +67,7 @@ run_tokenizer:
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--num_workers $(NUM_WORKERS) \
-		--model_name $(MODEL_NAME) \
+		--model_name $(MODEL_NAME)
 
 train_model:
 	uv run -m core.train_model \
@@ -129,7 +121,6 @@ resume_train_model:
 		--wandb_run_id $(WANDB_RUN_ID) \
 		--device $(DEVICE)
 
-# Combined pipelines
 init: setup download_dataset
 	@echo "✓ Environment ready and dataset downloaded"
 
