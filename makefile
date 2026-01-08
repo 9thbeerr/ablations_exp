@@ -71,7 +71,7 @@ run_tokenizer:
 		--model_name $(MODEL_NAME)
 
 train_model:
-	uv run -m core.train_model \
+	wandb login $$WANDB_API_KEY && uv run -m core.train_model \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--d_model $(D_MODEL) \
@@ -96,7 +96,7 @@ train_model:
 		--device $(DEVICE)
 
 resume_train_model:
-	uv run -m core.train_model \
+	wandb login $$WANDB_API_KEY && uv run -m core.train_model \
 		--vocab_size $(VOCAB_SIZE) \
 		--max_seq_len $(MAX_SEQ_LEN) \
 		--d_model $(D_MODEL) \

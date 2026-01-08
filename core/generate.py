@@ -17,7 +17,7 @@ def generate_with_temperature(
 ):
     input_ids = tokenizer.encode(input_prompt).ids
     input_ids = torch.tensor([input_ids], dtype=torch.long).to(
-        "mps"
+        device
     )  # shape: [1, seq_len]
 
     for _ in range(max_seq_len - input_ids.shape[1]):
@@ -28,7 +28,7 @@ def generate_with_temperature(
         next_token_id = torch.argmax(probs).item()
         next_token = tokenizer.decode([next_token_id])
         input_ids = torch.cat(
-            [input_ids, torch.tensor([[next_token_id]], device="mps")], dim=1
+            [input_ids, torch.tensor([[next_token_id]], device=device)], dim=1
         )
 
     print("-->", tokenizer.decode(input_ids[0].tolist()))
@@ -49,7 +49,7 @@ def generate_next_tokens_batch(
     for i, ids in enumerate(encoded):
         input_ids[i, : len(ids)] = torch.tensor(ids)
 
-    input_ids = input_ids.to("mps")
+    input_ids = input_ids.to(device)
 
     # Generate tokens until max_seq_len
     model.eval()  # Add eval mode
@@ -85,16 +85,14 @@ if __name__ == "__main__":
         "--max_seq_len", type=int, default=10, help="Max Sequence Length"
     )
     parser.add_argument("--model_name", type=str, help="Model Name")
-    parser.add_argument(
-        "--wandb_id", type=str, help="Wandb_id of saved model checkpoint"
-    )
+    parser.add_argument("--device", type=str, help="cuda|mps|cpu", default="cpu")
 
     args = parser.parse_args()
 
     print(args)
 
     model_name = args.model_name
-    wandb_id = args.wandb_id
+    device = args.device
 
     root_path = Path(os.getcwd())
     tokenizer_path = (
@@ -104,8 +102,6 @@ if __name__ == "__main__":
     model_checkpoint = (
         root_path / "checkpoints" / model_name / f"{model_name}-{wandb_id}.pt"
     )
-
-    device = "mps"
 
     print(str(model_checkpoint))
     tokenizer = Tokenizer.from_file(str(tokenizer_path))

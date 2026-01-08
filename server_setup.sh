@@ -1,13 +1,145 @@
 #!/bin/bash
+set -e
 
-# Install uv
-pip install uv
+# Shared Settings
+PYTHON=python
+export TOKENIZERS_PARALLELISM=true
+export WANDB_API_KEY="${WANDB_API_KEY:-aklsjdfl}"
 
-uv venv --python 3.13
-# Create and activate virtual environment
-source .venv/bin/activate 
+# Model Settings
+MODEL_NAME=finewebedu10bt
+VOCAB_SIZE=10000
+MAX_SEQ_LEN=256
 
-# Install packages from pyproject.toml or requirements.txt
-uv run
+# Generation Settings
+TEMPERATURE=0.8
+INPUT_PROMPT="Hello world, "
+GEN_MAX_SEQ_LEN=256
 
-export TOKENIZERS_PARALLELISM="true"
+# Training Settings
+D_MODEL=1024
+NUM_LAYERS=12
+NUM_HEADS=8
+D_FF=3072
+ROPE_THETA=10000
+NUM_STEPS=10000
+LR=6e-4
+BETA1=0.9
+BETA2=0.95
+EPS=1e-8
+WEIGHT_DECAY=0.001
+LR_MAX=2e-4
+LR_MIN=3e-5
+WARMUP_ITERS=1000
+COSINE_CYCLE_ITERS=8000
+MAX_L2_NORM=5.0
+USE_GRADIENT_CHECKPOINT=False
+BATCH_SIZE=32
+MODE=train
+DEVICE=cuda
+WANDB_RUN_ID=""
+NUM_WORKERS=$(python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
+
+# Functions
+setup() {
+    pip install uv
+    uv venv --python 3.13
+}
+
+download_dataset() {
+    uv run download_dataset_fineweb.py
+}
+
+generate() {
+    uv run -m core.generate \
+        --temperature "$TEMPERATURE" \
+        --input_prompt "$INPUT_PROMPT" \
+        --max_seq_len "$GEN_MAX_SEQ_LEN" \
+        --model_name "$MODEL_NAME" \
+        --wandb_id "$WANDB_RUN_ID" \
+        --device "$DEVICE"
+}
+
+train_tokenizer() {
+    uv run -m core.tokenization \
+        --vocab_size "$VOCAB_SIZE" \
+        --max_seq_len "$MAX_SEQ_LEN" \
+        --model_name "$MODEL_NAME" \
+        --num_workers "$NUM_WORKERS" \
+        --train_tokenizer
+}
+
+run_tokenizer() {
+    uv run -m core.tokenization \
+        --vocab_size "$VOCAB_SIZE" \
+        --max_seq_len "$MAX_SEQ_LEN" \
+        --num_workers "$NUM_WORKERS" \
+        --model_name "$MODEL_NAME"
+}
+
+train_model() {
+    local RESUME=""
+    if [ "$1" = "resume" ]; then
+        RESUME="--train_resume --wandb_run_id $WANDB_RUN_ID"
+    fi
+    
+    uv run -m core.train_model \
+        --vocab_size "$VOCAB_SIZE" \
+        --max_seq_len "$MAX_SEQ_LEN" \
+        --d_model "$D_MODEL" \
+        --num_layers "$NUM_LAYERS" \
+        --num_heads "$NUM_HEADS" \
+        --d_ff "$D_FF" \
+        --rope_theta "$ROPE_THETA" \
+        --num_steps "$NUM_STEPS" \
+        --lr "$LR" \
+        --beta1 "$BETA1" \
+        --beta2 "$BETA2" \
+        --eps "$EPS" \
+        --weight_decay "$WEIGHT_DECAY" \
+        --lr_max "$LR_MAX" \
+        --lr_min "$LR_MIN" \
+        --use_gradient_checkpoint "$USE_GRADIENT_CHECKPOINT" \
+        --warmup_iters "$WARMUP_ITERS" \
+        --cosine_cycle_iters "$COSINE_CYCLE_ITERS" \
+        --max_l2_norm "$MAX_L2_NORM" \
+        --mode "$MODE" \
+        --model_name "$MODEL_NAME" \
+        --device "$DEVICE" \
+        $RESUME
+}
+
+init() {
+    setup
+    download_dataset
+    echo "✓ Environment ready and dataset downloaded"
+}
+
+build_tokenizer() {
+    train_tokenizer
+    run_tokenizer
+    echo "✓ Complete setup with tokenizer trained"
+}
+
+train_pipeline() {
+    train_model
+    echo "✓ Training pipeline complete"
+}
+
+# Command handler
+case "${1:-help}" in
+    setup) setup ;;
+    download) download_dataset ;;
+    generate) generate ;;
+    train-tokenizer) train_tokenizer ;;
+    run-tokenizer) run_tokenizer ;;
+    train) train_model ;;
+    resume) train_model resume ;;
+    init) init ;;
+    build-tokenizer) build_tokenizer ;;
+    train-pipeline) train_pipeline ;;
+    *)
+        echo "Usage: $0 {setup|download|generate|train-tokenizer|run-tokenizer|train|resume|init|build-tokenizer|train-pipeline}"
+        exit 1
+        ;;
+esac
