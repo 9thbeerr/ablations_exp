@@ -1,1 +1,2 @@
-From cs336, cleaned up scaffoling and nothing else.
+From cs336, cleaned up Scaffolding and nothing else.
+
