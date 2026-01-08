@@ -321,6 +321,7 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
                                 doc_offsets.append((total_tokens, len(token_ids)))
                                 total_tokens += len(token_ids)
                                 chunk_count += 1
+                                print(f"Processed {chunk_count}")
 
                         print(
                             f"  Total: {chunk_count} chunks, {total_tokens:,} tokens, "
@@ -344,6 +345,7 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
                             doc_offsets.append((total_tokens, len(token_ids)))
                             total_tokens += len(token_ids)
                             chunk_count += 1
+                            print(f"Processed {chunk_count}")
 
                     del text_chunks, encodings
                     gc.collect()
