@@ -7,7 +7,24 @@ VOCAB_SIZE=10000
 MAX_SEQ_LEN=256
 
 # === Make Targets ===
-.PHONY: generate train_tokenizer run_tokenizer train_model resume_train_model
+.PHONY: generate train_tokenizer run_tokenizer train_model resume_train_model setup download_dataset
+
+REPO_URL ?= https://github.com/9thbeeer/ablations_exp.git
+REPO_DIR ?= ablations_exp
+WANDB_API_KEY=aklsjdfl
+
+setup:
+	git clone $(REPO_URL) && \
+	cd $(REPO_DIR) && \
+	export WANDB_API_KEY=$(WANDB_API_KEY) && \
+	pip install uv && \
+	uv venv --python 3.13 && \
+	source .venv/bin/activate && \
+	export TOKENIZERS_PARALLELISM=true && \
+	uv run
+
+download_dataset:
+	uv run download_dataset_fineweb.py
 
 # === Generate ===
 TEMPERATURE=0.8
@@ -36,7 +53,7 @@ BATCH_SIZE=4
 MODE=train
 DEVICE=mps
 WANDB_RUN_ID=
-NUM_WORKERS=2
+NUM_WORKERS ?= $(shell python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
 ### latest model to use to resume
 
 generate:

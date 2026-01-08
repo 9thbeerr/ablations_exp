@@ -3,11 +3,12 @@ import sys
 import shutil
 from huggingface_hub import hf_hub_download
 
+
 def get(fname, target_dir):
     subpath = os.path.join("sample", "10BT", fname)
     os.makedirs(target_dir, exist_ok=True)
     final_path = os.path.join(target_dir, fname)
-    
+
     if not os.path.exists(final_path):
         downloaded_path = hf_hub_download(
             repo_id="HuggingFaceFW/fineweb-edu",
@@ -19,6 +20,7 @@ def get(fname, target_dir):
         print(f"Downloaded: {fname} -> {target_dir}")
     else:
         print(f"Already exists: {fname}")
+
 
 # Get number of chunks
 chunk_no = int(sys.argv[1]) if len(sys.argv) >= 2 else 14
