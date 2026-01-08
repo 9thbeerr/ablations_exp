@@ -247,11 +247,6 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
     """Tokenize data files and save as binary format"""
     print("Starting tokenization...")
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    tokenizer.enable_padding()
-
-    # Check memory
-    available_mem = get_available_memory()
-    print(f"Available memory: {available_mem:.1f}GB")
 
     for mode in ["train", "valid"]:
         processed_data_dir = data_dir / "processed_data" / mode
@@ -259,7 +254,6 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
         tokenized_data_bin_path = processed_data_dir / f"{mode}.bin"
         tokenized_data_idx_path = processed_data_dir / f"{mode}.idx"
 
-        # Auto-detect files
         mode_path = Path(data_dir, "raw_data", mode)
         tokenize_filename_list = []
         for ext in found_extensions:
@@ -272,47 +266,32 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
 
         print(f"\nTokenizing {len(tokenize_filename_list)} files for {mode}")
 
-        # Dynamic batch size based on memory
-        max_batch_size = get_max_batch_size()
-        print(f"Using batch size: {max_batch_size} chunks (targeting 70% RAM usage)")
-
-        # Larger text chunks for efficiency
-        text_chunk_size = 5 * 1024 * 1024  # 5MB per chunk
-
         doc_offsets = []
         total_tokens = 0
         chunk_count = 0
 
-        with open(tokenized_data_bin_path, "wb") as out_file:
+        # Small batch size to prevent memory explosion
+        MINI_BATCH = 100  # Process 50 chunks at a time max
+
+        with open(tokenized_data_bin_path, "wb", buffering=8192 * 1024) as out_file:
             for file_idx, raw_data_file in enumerate(tokenize_filename_list):
                 print(
-                    f"\nProcessing file {file_idx + 1}/{len(tokenize_filename_list)}: {raw_data_file}"
+                    f"\nFile {file_idx + 1}/{len(tokenize_filename_list)}: {raw_data_file}"
                 )
 
-                text_chunks = []
+                text_buffer = []
 
-                # Load as many chunks as memory allows
+                # Stream through file in 1MB text chunks
                 for text_chunk in read_file_content_streaming(
-                    raw_data_file, text_chunk_size
+                    raw_data_file, 1024 * 1024 * 10
                 ):
-                    text_chunks.append(text_chunk)
+                    text_buffer.append(text_chunk)
 
-                    # Check memory usage periodically
-                    if len(text_chunks) % 100 == 0:
-                        current_mem = psutil.virtual_memory().percent
-                        if current_mem > 85:  # Safety threshold
-                            print(
-                                f"  Memory at {current_mem}% - processing batch early"
-                            )
-                            break
-
-                    # Process when batch is full
-                    if len(text_chunks) >= max_batch_size:
-                        print(f"  Processing batch of {len(text_chunks)} chunks...")
-
-                        # Tokenize entire batch at once
-                        encodings = tokenizer.encode_batch(text_chunks)
-
+                    # Process mini-batches immediately
+                    if len(text_buffer) >= MINI_BATCH:
+                        encodings = tokenizer.encode_batch(text_buffer)
+                        del text_buffer
+                        # Write tokens immediately, don't accumulate
                         for encoding in encodings:
                             token_ids = encoding.ids
                             if len(token_ids) > 0:
@@ -321,22 +300,21 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
                                 doc_offsets.append((total_tokens, len(token_ids)))
                                 total_tokens += len(token_ids)
                                 chunk_count += 1
-                                print(f"Processed {chunk_count}")
 
-                        print(
-                            f"  Total: {chunk_count} chunks, {total_tokens:,} tokens, "
-                            f"RAM: {psutil.virtual_memory().percent:.1f}%"
-                        )
-
-                        text_chunks = []
+                        # Immediate cleanup
                         del encodings
+                        text_buffer = []
                         gc.collect()
 
-                # Process remaining chunks from this file
-                if text_chunks:
-                    print(f"  Processing final batch of {len(text_chunks)} chunks...")
-                    encodings = tokenizer.encode_batch(text_chunks)
+                        if chunk_count % 500 == 0:
+                            mem = psutil.virtual_memory().percent
+                            print(
+                                f"  {chunk_count} chunks | {total_tokens:,} tokens | RAM: {mem:.1f}%"
+                            )
 
+                # Process remaining chunks
+                if text_buffer:
+                    encodings = tokenizer.encode_batch(text_buffer)
                     for encoding in encodings:
                         token_ids = encoding.ids
                         if len(token_ids) > 0:
@@ -345,23 +323,19 @@ def tokenize_data(args, data_dir, tokenizer_path, found_extensions):
                             doc_offsets.append((total_tokens, len(token_ids)))
                             total_tokens += len(token_ids)
                             chunk_count += 1
-                            print(f"Processed {chunk_count}")
 
-                    del text_chunks, encodings
+                    del encodings, text_buffer
                     gc.collect()
 
-                print(f"✓ File complete: {total_tokens:,} tokens")
+                print(f"✓ Completed: {total_tokens:,} tokens")
 
-        # Write index file
+        # Write index
         with open(tokenized_data_idx_path, "wb") as f:
             f.write(struct.pack("<Q", len(doc_offsets)))
             for offset, length in doc_offsets:
                 f.write(struct.pack("<QQ", offset, length))
 
-        print(
-            f"\n✓ {mode} tokenization complete: {total_tokens:,} tokens in {chunk_count} chunks"
-        )
-        print(f"Final memory usage: {psutil.virtual_memory().percent:.1f}%")
+        print(f"\n✓ {mode}: {total_tokens:,} tokens in {chunk_count} chunks")
 
 
 def main():
