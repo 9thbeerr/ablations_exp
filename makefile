@@ -15,7 +15,7 @@ setup:
 	export WANDB_API_KEY=$(WANDB_API_KEY) && \
 	pip install uv && \
 	uv venv --python 3.13 && \
-	source .venv/bin/activate && \
+	. .venv/bin/activate && \
 	export TOKENIZERS_PARALLELISM=true && \
 	uv run
 
