@@ -9,13 +9,9 @@ MAX_SEQ_LEN=256
 # === Make Targets ===
 .PHONY: generate train_tokenizer run_tokenizer train_model resume_train_model setup download_dataset
 
-REPO_URL ?= https://github.com/9thbeeer/ablations_exp.git
-REPO_DIR ?= ablations_exp
 WANDB_API_KEY=aklsjdfl
 
 setup:
-	git clone $(REPO_URL) && \
-	cd $(REPO_DIR) && \
 	export WANDB_API_KEY=$(WANDB_API_KEY) && \
 	pip install uv && \
 	uv venv --python 3.13 && \
