@@ -132,3 +132,13 @@ resume_train_model:
 		--train_resume \
 		--wandb_run_id $(WANDB_RUN_ID) \
 		--device $(DEVICE)
+
+# Combined pipelines
+init: setup download_dataset
+	@echo "✓ Environment ready and dataset downloaded"
+
+build_tokenizer: train_tokenizer run_tokenizer
+	@echo "✓ Complete setup with tokenizer trained"
+
+train_pipeline: train_model
+	@echo "✓ Training pipeline complete"
