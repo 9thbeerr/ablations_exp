@@ -1,3 +1,7 @@
+
+export TOKENIZERS_PARALLELISM := true
+export WANDB_API_KEY ?= $(shell echo $$WANDB_API_KEY)
+
 # === Shared Settings ===
 PYTHON=python
 # === General Model Settings ===
@@ -36,11 +40,8 @@ WANDB_RUN_ID=
 NUM_WORKERS ?= $(shell python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
 
 setup:
-	pip install uv && \
-	uv venv --python 3.13 && \
-	export TOKENIZERS_PARALLELISM=true && \
-	export WANDB_API_KEY=$(WANDB_API_KEY) && \
-	uv run
+	pip install uv
+	uv venv --python 3.13
 
 download_dataset:
 	uv run download_dataset_fineweb.py
