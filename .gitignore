@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+downloadhf.py
+uploadhf.py
 raw_data
 processed_data
 checkpoints
