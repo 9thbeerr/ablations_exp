@@ -36,12 +36,14 @@ def generate_with_temperature(
 
 def generate_next_tokens_batch(
     temperature: float,
-    tokenizer: Tokenizer,
+    tokenizer_path: str,
     model: torch.nn.Module,
     prompts: list[str],
     max_seq_len: int,
     device: str,
 ):
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+
     # Encode all prompts
     encoded = [tokenizer.encode(p).ids for p in prompts]
     max_len = max(len(ids) for ids in encoded)

@@ -20,6 +20,9 @@ from core.model import (
 from pathlib import Path
 
 import wandb
+from huggingface_hub import snapshot_download, upload_folder
+
+username = os.environ["HF_USERNAME"]
 
 
 def get_args():
@@ -119,6 +122,8 @@ if __name__ == "__main__":
 
     checkpoint_dir = root_path / "checkpoints"
 
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
     # to check if checkpoint exists and run from there or error for no dir found nor model found
     model_checkpoint_path = checkpoint_dir / model_name / f"{model_run}.pt"
 
@@ -174,11 +179,51 @@ if __name__ == "__main__":
         f"Model Name: {model_name},\nRoot: {root_path},\nMode: {mode},\nDatasets: {train_files + valid_files},\nCheckpoint_path: {current_checkpoints}, \nWandb ID: {run_id}"
     )
 
-    print(tokenizer_path)
-
-    tokenizer = Tokenizer.from_file(str(tokenizer_path))
-
     # tokenized_data = np.memmap(str(train_dataset_path), dtype=np.int64, mode="r")
+
+    model = TransformerLM(**model_config)
+    model = torch.compile(model, backend="aot_eager")
+    optimizer = AdamW(
+        params=model.parameters(),
+        lr=args.lr,
+        betas=(args.beta1, args.beta2),
+        eps=args.eps,
+        weight_decay=args.weight_decay,
+    )
+
+    step = 0
+
+    snapshot_download(
+        repo_id=f"{username}/{args.model_name}",
+        repo_type="model",
+        local_dir=f"./checkpoints/{args.model_name}",
+        ignore_patterns=["*.pt", ".safe_tensors"],
+        local_dir_use_symlinks=False,
+    )
+
+    if args.train_resume:
+        snapshot_download(
+            repo_id=f"{username}/{args.model_name}",
+            repo_type="model",
+            local_dir=f"./checkpoints/{args.model_name}",
+            allow_patterns=["*.pt", ".safe_tensors"],
+            local_dir_use_symlinks=False,
+        )
+
+        step = load_checkpoint(
+            src=str(model_checkpoint_path), model=model, optimizer=optimizer
+        )
+
+        print(
+            f"Resuming training from step: {step} \nmodel config: {model_config} \nHyperParameters: {hyperparameters}"
+        )
+
+    else:
+        print(
+            f"Training start with \nmodel config: {model_config} \nHyperParameters: {hyperparameters}"
+        )
+
+    print(tokenizer_path)
 
     train_dataset = StreamingMegatronDataset(
         files=train_files,
@@ -198,31 +243,6 @@ if __name__ == "__main__":
         shuffle_buffer=2048,  # smaller is fine for eval
     )
 
-    model = TransformerLM(**model_config)
-    model = torch.compile(model, backend="aot_eager")
-    optimizer = AdamW(
-        params=model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        eps=args.eps,
-        weight_decay=args.weight_decay,
-    )
-
-    step = 0
-
-    if args.train_resume:
-        step = load_checkpoint(
-            src=str(model_checkpoint_path), model=model, optimizer=optimizer
-        )
-        print(
-            f"Resuming training from step: {step} \nmodel config: {model_config} \nHyperParameters: {hyperparameters}"
-        )
-
-    else:
-        print(
-            f"Training start with \nmodel config: {model_config} \nHyperParameters: {hyperparameters}"
-        )
-
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Total parameters: {total_params:.2f}M")
     trainable_params = (
@@ -230,16 +250,19 @@ if __name__ == "__main__":
     )
     print(f"Trainable parameters: {trainable_params:.2f}M")
 
-    #Todo resumes from checkpoint steps and this new shall be added. how??
+    # Todo resumes from checkpoint steps and this new shall be added. how??
     for local_step, (x, y) in enumerate(train_dataset):
         step = step + 1
-        
+
         logits = model(x)
         loss = calculate_cross_entropy(logits, y)
         tokens = x.numel()
-        wandb.log({
-            "perf/tokens_per_step": tokens,
-        }, step=step)
+        wandb.log(
+            {
+                "perf/tokens_per_step": tokens,
+            },
+            step=step,
+        )
 
         optimizer.zero_grad()
         loss.backward()
@@ -247,16 +270,18 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             param_norm = torch.sqrt(
-            sum(p.norm() ** 2 for p in model.parameters() if p.requires_grad)
+                sum(p.norm() ** 2 for p in model.parameters() if p.requires_grad)
             )
 
-        wandb.log({
-            "train/loss": loss.item(),
-            "train/grad_norm": total_norm,
-            "train/param_norm": param_norm.item(),
-            "train/update_ratio": total_norm / (param_norm + 1e-8),
-        }, step=step)
-
+        wandb.log(
+            {
+                "train/loss": loss.item(),
+                "train/grad_norm": total_norm,
+                "train/param_norm": param_norm.item(),
+                "train/update_ratio": total_norm / (param_norm + 1e-8),
+            },
+            step=step,
+        )
 
         optimizer.step()
         lr = learning_rate_schedule(
@@ -272,20 +297,14 @@ if __name__ == "__main__":
 
         print(f"Step:{step}, Loss: {loss}, LR:{lr}")
 
-        wandb.log({
-            "opt/lr": lr,
-        }, step=step)
+        wandb.log(
+            {
+                "opt/lr": lr,
+            },
+            step=step,
+        )
 
         if step % 500 == 0 and step >= 10:
-            print("Saving Checkpoint at step:", step)
-            save_checkpoint(
-                model,
-                optimizer,
-                step,
-                out=str(model_checkpoint_path),
-                config=model_config,
-            )
-
             val_loss_per_step = []
             for val_steps, (x_val, y_val) in enumerate(valid_dataset):
                 if val_steps < 50:
@@ -298,9 +317,12 @@ if __name__ == "__main__":
                     break
 
             val_final_loss = sum(val_loss_per_step) / len(val_loss_per_step)
-            wandb.log({
-                "val/loss": val_final_loss,
-            }, step=step)
+            wandb.log(
+                {
+                    "val/loss": val_final_loss,
+                },
+                step=step,
+            )
             print(f"Validation Loss at step: {step} | {val_final_loss}")
 
             ## Generation of Text
@@ -324,13 +346,25 @@ if __name__ == "__main__":
             ]
 
             generate_next_tokens_batch(
-                0.8, tokenizer, model, eval_prompts, 64, device=args.device
+                0.8, str(tokenizer_path), model, eval_prompts, 64, device=args.device
             )
 
             model.train()
 
-        if step > args.num_steps:
-            break
+        if step % 1000 == 0:
+            print("Saving Checkpoint at step:", step)
+            save_checkpoint(
+                model,
+                optimizer,
+                step,
+                out=str(model_checkpoint_path),
+                config=model_config,
+            )
+            upload_folder(
+                folder_path=f"./checkpoints/{args.model_name}",
+                repo_id=f"{username}/{args.model_name}",
+                repo_type="model",
+            )
 
     def cleanup(*_):
         if wandb.run is not None:

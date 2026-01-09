@@ -4,11 +4,10 @@ set -e
 # Shared Settings
 PYTHON=python
 export TOKENIZERS_PARALLELISM=true
-export WANDB_API_KEY="${WANDB_API_KEY:-aklsjdfl}"
 
 # Model Settings
 MODEL_NAME=tinystories
-VOCAB_SIZE=10000
+VOCAB_SIZE=100
 MAX_SEQ_LEN=256
 
 # Generation Settings
@@ -17,10 +16,10 @@ INPUT_PROMPT="Hello world, "
 GEN_MAX_SEQ_LEN=256
 
 # Training Settings
-D_MODEL=1024
-NUM_LAYERS=12
-NUM_HEADS=8
-D_FF=3072
+D_MODEL=128
+NUM_LAYERS=4
+NUM_HEADS=2
+D_FF=256
 ROPE_THETA=10000
 NUM_STEPS=10000
 LR=6e-4
