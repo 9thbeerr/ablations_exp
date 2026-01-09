@@ -83,6 +83,7 @@ if __name__ == "__main__":
         entity="nikeshnaik-dev",
         project=args.model_name,
         resume="allow",
+        id=run_id,
         config={
             "vocab_size": args.vocab_size,
             "max_seq_len": args.max_seq_len,
@@ -229,15 +230,34 @@ if __name__ == "__main__":
     )
     print(f"Trainable parameters: {trainable_params:.2f}M")
 
-    for step, (x, y) in enumerate(train_dataset):
+    #Todo resumes from checkpoint steps and this new shall be added. how??
+    for local_step, (x, y) in enumerate(train_dataset):
+        step = step + 1
+        
         logits = model(x)
         loss = calculate_cross_entropy(logits, y)
+        tokens = x.numel()
+        wandb.log({
+            "perf/tokens_per_step": tokens,
+        }, step=step)
 
         optimizer.zero_grad()
         loss.backward()
         total_norm = gradient_clipping(model.parameters(), args.max_l2_norm)
 
-        wandb.log(data={"grad_norm": total_norm})
+        with torch.no_grad():
+            param_norm = torch.sqrt(
+            sum(p.norm() ** 2 for p in model.parameters() if p.requires_grad)
+            )
+
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": total_norm,
+            "train/param_norm": param_norm.item(),
+            "train/update_ratio": total_norm / (param_norm + 1e-8),
+        }, step=step)
+
+
         optimizer.step()
         lr = learning_rate_schedule(
             step,
@@ -252,9 +272,11 @@ if __name__ == "__main__":
 
         print(f"Step:{step}, Loss: {loss}, LR:{lr}")
 
-        wandb.log({"loss": loss.item(), "step": step, "learning_rate": lr})
+        wandb.log({
+            "opt/lr": lr,
+        }, step=step)
 
-        if step % 100 == 0 and step >= 10:
+        if step % 500 == 0 and step >= 10:
             print("Saving Checkpoint at step:", step)
             save_checkpoint(
                 model,
@@ -270,11 +292,15 @@ if __name__ == "__main__":
                     model.eval()
                     with torch.no_grad():
                         val_logits = model(x_val)
-                        val_loss = calculate_cross_entropy(logits, y_val)
+                        val_loss = calculate_cross_entropy(val_logits, y_val)
                         val_loss_per_step.append(val_loss.item())
+                else:
+                    break
 
             val_final_loss = sum(val_loss_per_step) / len(val_loss_per_step)
-            wandb.log({"val_loss": val_final_loss, "step": step})
+            wandb.log({
+                "val/loss": val_final_loss,
+            }, step=step)
             print(f"Validation Loss at step: {step} | {val_final_loss}")
 
             ## Generation of Text
