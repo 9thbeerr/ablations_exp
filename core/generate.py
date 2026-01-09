@@ -40,7 +40,7 @@ def generate_next_tokens_batch(
     model: torch.nn.Module,
     prompts: list[str],
     max_seq_len: int,
-    device: str
+    device: str,
 ):
     # Encode all prompts
     encoded = [tokenizer.encode(p).ids for p in prompts]
@@ -86,6 +86,8 @@ if __name__ == "__main__":
         "--max_seq_len", type=int, default=10, help="Max Sequence Length"
     )
     parser.add_argument("--model_name", type=str, help="Model Name")
+    parser.add_argument("--wandb_run_id", type=str, help="Wandb Run Id")
+
     parser.add_argument("--device", type=str, help="cuda|mps|cpu", default="cpu")
 
     args = parser.parse_args()
@@ -96,12 +98,10 @@ if __name__ == "__main__":
     device = args.device
 
     root_path = Path(os.getcwd())
-    tokenizer_path = (
-        root_path / "checkpoints" / model_name / f"tokenizer.json"
-    )
+    tokenizer_path = root_path / "checkpoints" / model_name / f"tokenizer.json"
 
     model_checkpoint = (
-        root_path / "checkpoints" / model_name / f"{model_name}-{wandb_id}.pt"
+        root_path / "checkpoints" / model_name / f"{model_name}-{args.wandb_run_id}.pt"
     )
 
     print(str(model_checkpoint))

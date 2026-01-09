@@ -1,3 +1,4 @@
+import enum
 import sys
 import signal
 import argparse
@@ -5,7 +6,7 @@ import os
 from tokenizers import Tokenizer
 import torch
 
-from core.dataloader import MegatronDataset
+from core.dataloader import StreamingMegatronDataset
 from core.generate import generate_next_tokens_batch
 from core.model import (
     AdamW,
@@ -122,21 +123,7 @@ if __name__ == "__main__":
 
     tokenizer_path = checkpoint_dir / model_name / f"tokenizer.json"
 
-    processed_data_dir = root_path / model_name / "processed_data"
-
-    if mode == "train":
-        train_dataset_bin_path = processed_data_dir / f"train/train.bin"
-        train_dataset_idx_path = processed_data_dir / f"train/train.idx"
-
-        valid_dataset_bin_path = processed_data_dir / f"valid/valid.bin"
-        valid_dataset_idx_path = processed_data_dir / f"valid/valid.idx"
-    elif mode == "valid":
-        # valid and train would be same, since this is dryrun
-        train_dataset_bin_path = processed_data_dir / f"valid/valid.bin"
-        train_dataset_idx_path = processed_data_dir / f"valid/valid.idx"
-
-        valid_dataset_bin_path = processed_data_dir / f"valid/valid.bin"
-        valid_dataset_idx_path = processed_data_dir / f"valid/valid.idx"
+    raw_data_dir = root_path / model_name / "raw_data"
 
     model_config = {
         "vocab_size": args.vocab_size,
@@ -167,13 +154,23 @@ if __name__ == "__main__":
         "max_l2_norm": args.max_l2_norm,
     }
 
-    current_datasets = [f for f in processed_data_dir.rglob(f"*.bin") if f.is_file()]
+    train_files = [
+        f
+        for f in (raw_data_dir / "train").rglob("*")
+        if f.suffix.lower() in {".txt", ".parquet", ".csv"}
+    ]
+
+    valid_files = [
+        f
+        for f in (raw_data_dir / "valid").rglob("*")
+        if f.suffix.lower() in {".txt", ".parquet", ".csv"}
+    ]
     current_checkpoints = [
-        f for f in model_checkpoint_path.rglob(f"*.pt") if f.is_file()
+        f for f in model_checkpoint_path.rglob(f"*{run_id}.pt") if f.is_file()
     ]
 
     print(
-        f"Model Name: {model_name},\nRoot: {root_path},\nMode: {mode},\nDatasets: {current_datasets},\nCheckpoint_path: {current_checkpoints}, \nWandb ID: {run_id}"
+        f"Model Name: {model_name},\nRoot: {root_path},\nMode: {mode},\nDatasets: {train_files + valid_files},\nCheckpoint_path: {current_checkpoints}, \nWandb ID: {run_id}"
     )
 
     print(tokenizer_path)
@@ -182,12 +179,22 @@ if __name__ == "__main__":
 
     # tokenized_data = np.memmap(str(train_dataset_path), dtype=np.int64, mode="r")
 
-    train_tokenized_dataset = MegatronDataset(
-        str(train_dataset_bin_path), args.max_seq_len
+    train_dataset = StreamingMegatronDataset(
+        files=train_files,
+        tokenizer_path=str(tokenizer_path),
+        context_length=args.max_seq_len,
+        batch_size=args.batch_size,
+        device=args.device,
+        shuffle_buffer=8192,
     )
 
-    valid_tokenized_dataset = MegatronDataset(
-        str(valid_dataset_bin_path), args.max_seq_len
+    valid_dataset = StreamingMegatronDataset(
+        files=valid_files,
+        tokenizer_path=str(tokenizer_path),
+        context_length=args.max_seq_len,
+        batch_size=args.batch_size,
+        device=args.device,
+        shuffle_buffer=2048,  # smaller is fine for eval
     )
 
     model = TransformerLM(**model_config)
@@ -222,12 +229,7 @@ if __name__ == "__main__":
     )
     print(f"Trainable parameters: {trainable_params:.2f}M")
 
-    while step < args.num_steps:
-        # (x , y) = get_batches(tokenized_data, 32, args.max_seq_len, "cpu")
-        (x, y) = train_tokenized_dataset.get_batch(
-            args.batch_size, "cpu"
-        )
-
+    for step, (x, y) in enumerate(train_dataset):
         logits = model(x)
         loss = calculate_cross_entropy(logits, y)
 
@@ -262,19 +264,18 @@ if __name__ == "__main__":
                 config=model_config,
             )
 
-            # tokenized_valid_data = np.memmap(str(valid_dataset_path), dtype=np.int64, mode="r")
-            # (x_val , y_val) = get_batches(tokenized_valid_data, 32, args.max_seq_len, "cpu")
+            val_loss_per_step = []
+            for val_steps, (x_val, y_val) in enumerate(valid_dataset):
+                if val_steps < 50:
+                    model.eval()
+                    with torch.no_grad():
+                        val_logits = model(x_val)
+                        val_loss = calculate_cross_entropy(logits, y_val)
+                        val_loss_per_step.append(val_loss.item())
 
-            (x_val, y_val) = valid_tokenized_dataset.get_batch(
-                args.batch_size, "cpu"
-            )
-
-            model.eval()
-            val_logits = model(x_val)
-
-            val_loss = calculate_cross_entropy(logits, y_val)
-            wandb.log({"val_loss": val_loss.item(), "step": step})
-            print(f"Validation Loss at step: {step} | {val_loss.item()}")
+            val_final_loss = sum(val_loss_per_step) / len(val_loss_per_step)
+            wandb.log({"val_loss": val_final_loss, "step": step})
+            print(f"Validation Loss at step: {step} | {val_final_loss}")
 
             ## Generation of Text
             eval_prompts = [
@@ -296,11 +297,14 @@ if __name__ == "__main__":
                 "Explain why learning is important.",
             ]
 
-            generate_next_tokens_batch(0.8, tokenizer, model, eval_prompts, 64, device="cuda")
+            generate_next_tokens_batch(
+                0.8, tokenizer, model, eval_prompts, 64, device=args.device
+            )
 
             model.train()
 
-        step = step + 1
+        if step > args.num_steps:
+            break
 
     def cleanup(*_):
         if wandb.run is not None:

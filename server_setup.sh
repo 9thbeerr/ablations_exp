@@ -36,7 +36,7 @@ MAX_L2_NORM=5.0
 USE_GRADIENT_CHECKPOINT=False
 BATCH_SIZE=32
 MODE=train
-DEVICE=cuda
+DEVICE=mps
 WANDB_RUN_ID=""
 NUM_WORKERS=$(python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
 
@@ -51,12 +51,13 @@ download_dataset() {
 }
 
 generate() {
+    local WANDB_RUN_ID="$1"
     uv run -m core.generate \
         --temperature "$TEMPERATURE" \
         --input_prompt "$INPUT_PROMPT" \
         --max_seq_len "$GEN_MAX_SEQ_LEN" \
         --model_name "$MODEL_NAME" \
-        --wandb_id "$WANDB_RUN_ID" \
+        --wandb_run_id "$WANDB_RUN_ID" \
         --device "$DEVICE"
 }
 
@@ -65,16 +66,7 @@ train_tokenizer() {
         --vocab_size "$VOCAB_SIZE" \
         --max_seq_len "$MAX_SEQ_LEN" \
         --model_name "$MODEL_NAME" \
-        --num_workers "$NUM_WORKERS" \
         --train_tokenizer
-}
-
-run_tokenizer() {
-    uv run -m core.tokenization \
-        --vocab_size "$VOCAB_SIZE" \
-        --max_seq_len "$MAX_SEQ_LEN" \
-        --num_workers "$NUM_WORKERS" \
-        --model_name "$MODEL_NAME"
 }
 
 train_model() {
@@ -111,13 +103,12 @@ train_model() {
 
 init() {
     setup
-    download_dataset
     echo "✓ Environment ready and dataset downloaded"
 }
 
 build_tokenizer() {
+    download_dataset
     train_tokenizer
-    run_tokenizer
     echo "✓ Complete setup with tokenizer trained"
 }
 
@@ -126,13 +117,18 @@ train_pipeline() {
     echo "✓ Training pipeline complete"
 }
 
-# Command handler
 case "${1:-help}" in
     setup) setup ;;
     download) download_dataset ;;
-    generate) generate ;;
+    generate)
+        if [ -z "$2" ]; then
+            echo "Error: WANDB_RUN_ID required"
+            echo "Usage: $0 generate <wandb_run_id>"
+            exit 1
+        fi
+        generate "$2"
+        ;;
     train-tokenizer) train_tokenizer ;;
-    run-tokenizer) run_tokenizer ;;
     train) train_model ;;
     resume) 
         if [ -z "$2" ]; then
@@ -140,13 +136,13 @@ case "${1:-help}" in
             echo "Usage: $0 resume <wandb_run_id>"
             exit 1
         fi
-        train_model resume "$2" 
+        train_model resume "$2"
         ;;
     init) init ;;
     build-tokenizer) build_tokenizer ;;
     train-pipeline) train_pipeline ;;
     *)
-        echo "Usage: $0 {setup|download|generate|train-tokenizer|run-tokenizer|train|resume|init|build-tokenizer|train-pipeline}"
+        echo "Usage: $0 {setup|download|generate|train-tokenizer|train|resume|init|build-tokenizer|train-pipeline}"
         exit 1
         ;;
 esac

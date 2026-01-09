@@ -26,7 +26,7 @@ def get(fname, target_dir):
 chunk_no = int(sys.argv[1]) if len(sys.argv) >= 2 else 14
 
 # Create directories
-base_dir = os.path.join(os.path.dirname(__file__), "finewebedu10bt", "raw_data")
+base_dir = os.path.join(os.path.dirname(__file__), "fineweb-edu", "raw_data")
 train_dir = os.path.join(base_dir, "train")
 valid_dir = os.path.join(base_dir, "valid")
 
