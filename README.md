@@ -101,6 +101,4 @@ Edit `server_setup.sh` to configure:
 ./server_setup.sh train-pipeline  # Full training pipeline
 ```
 
-## License
 
-MIT
