@@ -64,8 +64,7 @@ train_tokenizer() {
     uv run -m core.tokenization \
         --vocab_size "$VOCAB_SIZE" \
         --max_seq_len "$MAX_SEQ_LEN" \
-        --model_name "$MODEL_NAME" \
-        --train_tokenizer
+        --model_name "$MODEL_NAME" 
 }
 
 train_model() {

@@ -371,6 +371,12 @@ def calculate_cross_entropy(inputs: torch.Tensor, targets: torch.Tensor):
     return mean_cross_entropy_loss
 
 
+def appply_casual_weight_decay(param, update, learning_rate, weight_decay):
+    mask = (param * update) >= 0
+    update = update + (weight_decay * param * mask)
+    return param - learning_rate * update
+
+
 class AdamW(torch.optim.Optimizer):
     def __init__(
         self,
@@ -428,11 +434,18 @@ class AdamW(torch.optim.Optimizer):
                 denom = (second_moment.sqrt() / bias_correction2**0.5).add_(epsilon)
                 step_size = learning_rate / bias_correction1
 
-                # p.data = p.data - (step_size * (first_moment / torch.sqrt(second_moment + epsilon)))
-                p.data.addcdiv_(first_moment, denom, value=-step_size)
+                # # p.data = p.data - (step_size * (first_moment / torch.sqrt(second_moment + epsilon)))
+                # p.data.addcdiv_(first_moment, denom, value=-step_size)
 
-                # p.data = p.data - (step_size * weight_decay_rate * p.data)
-                p.data.add_(p.data, alpha=-learning_rate * weight_decay_rate)
+                # casual weight _decay
+                update = first_moment / denom  # adam update direction
+
+                # sign-gated weight decay
+                mask = (update * p.data) >= 0
+                update = update + weight_decay_rate * p.data * mask
+
+                # apply final update
+                p.data.add_(update, alpha=-step_size)
 
                 state["t"] = time_step + 1
                 state["first_moment"] = first_moment

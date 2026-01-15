@@ -250,6 +250,8 @@ if __name__ == "__main__":
     )
     print(f"Trainable parameters: {trainable_params:.2f}M")
 
+    total_tokens_seen = 0
+
     # Todo resumes from checkpoint steps and this new shall be added. how??
     for local_step, (x, y) in enumerate(train_dataset):
         step = step + 1
@@ -260,6 +262,7 @@ if __name__ == "__main__":
         wandb.log(
             {
                 "perf/tokens_per_step": tokens,
+                "perf/total_tokens_seen": total_tokens_seen,
             },
             step=step,
         )
@@ -268,17 +271,10 @@ if __name__ == "__main__":
         loss.backward()
         total_norm = gradient_clipping(model.parameters(), args.max_l2_norm)
 
-        with torch.no_grad():
-            param_norm = torch.sqrt(
-                sum(p.norm() ** 2 for p in model.parameters() if p.requires_grad)
-            )
-
         wandb.log(
             {
                 "train/loss": loss.item(),
                 "train/grad_norm": total_norm,
-                "train/param_norm": param_norm.item(),
-                "train/update_ratio": total_norm / (param_norm + 1e-8),
             },
             step=step,
         )
@@ -353,18 +349,21 @@ if __name__ == "__main__":
 
         if step % 1000 == 0:
             print("Saving Checkpoint at step:", step)
-            save_checkpoint(
-                model,
-                optimizer,
-                step,
-                out=str(model_checkpoint_path),
-                config=model_config,
-            )
-            upload_folder(
-                folder_path=f"./checkpoints/{args.model_name}",
-                repo_id=f"{username}/{args.model_name}",
-                repo_type="model",
-            )
+            try:
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    step,
+                    out=str(model_checkpoint_path),
+                    config=model_config,
+                )
+                upload_folder(
+                    folder_path=f"./checkpoints/{args.model_name}",
+                    repo_id=f"{username}/{args.model_name}",
+                    repo_type="model",
+                )
+            except Exception as e:
+                print("Checkpoint save failed:", e)
 
     def cleanup(*_):
         if wandb.run is not None:

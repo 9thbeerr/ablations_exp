@@ -1,11 +1,15 @@
 import argparse
 from pathlib import Path
+import json
 
 import pyarrow.parquet as pq
 import pandas as pd
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 
+from huggingface_hub import snapshot_download, upload_folder
+import os
 
+username = os.environ["HF_USERNAME"]
 # =========================
 # Streaming text reader
 # =========================
@@ -59,7 +63,7 @@ def stream_text(files, chunk_rows=2048):
 # =========================
 
 
-def train_tokenizer(files, vocab_size, out_path):
+def train_tokenizer(files, vocab_size, out_path, max_seq_len):
     tokenizer = ByteLevelBPETokenizer()
 
     def iterator():
@@ -76,37 +80,10 @@ def train_tokenizer(files, vocab_size, out_path):
 
     tokenizer.save(str(out_path))
 
-
-# =========================
-# Streaming token packer
-# =========================
-
-
-def token_sequence_generator(
-    files,
-    tokenizer_path,
-    seq_len,
-    eos_token="<|endoftext|>",
-):
-    tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    eos_id = tokenizer.token_to_id(eos_token)
-
-    buffer = []
-
-    for chunk in stream_text(files):
-        encs = tokenizer.encode_batch(chunk)
-
-        for e in encs:
-            buffer.extend(e.ids)
-            if eos_id is not None:
-                buffer.append(eos_id)
-
-            while len(buffer) >= seq_len + 1:
-                seq = buffer[: seq_len + 1]
-                buffer = buffer[seq_len:]
-                yield seq
-
-    # drop tail
+    # save meta for compatibility check
+    meta = {"vocab_size": vocab_size, "max_seq_len": max_seq_len}
+    with open(Path(out_path).with_name("tokenizer_meta.json"), "w") as f:
+        json.dump(meta, f)
 
 
 # =========================
@@ -119,7 +96,6 @@ def main():
     p.add_argument("--model_name", required=True)
     p.add_argument("--vocab_size", type=int, default=32000)
     p.add_argument("--max_seq_len", type=int, default=256)
-    p.add_argument("--train_tokenizer", action="store_true")
     args = p.parse_args()
 
     root = Path.cwd()
@@ -135,26 +111,72 @@ def main():
         if f.suffix.lower() in {".txt", ".parquet", ".csv"}
     ]
 
-    if args.train_tokenizer:
-        train_tokenizer(train_files, args.vocab_size, tokenizer_path)
-        print("✓ Tokenizer trained")
-        return
-
-    if not tokenizer_path.exists():
-        raise RuntimeError("Tokenizer not found")
-
-    # Example usage: plug this generator into your training loop
-    gen = token_sequence_generator(
-        train_files,
-        tokenizer_path,
-        args.seq_len,
+    # --- Try download existing tokenizer snapshot ---
+    snapshot_download(
+        repo_id=f"{username}/{args.model_name}",
+        repo_type="model",
+        local_dir=ckpt,
+        allow_patterns=["tokenizer.json", "tokenizer_meta.json"],
+        local_dir_use_symlinks=False,
+        ignore_patterns=["*.lock", "*.pt"],
     )
 
-    # sanity check
+    # --- Check compatibility ---
+    tokenizer_ok = False
+    meta_path = ckpt / "tokenizer_meta.json"
+
+    if tokenizer_path.exists() and meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+        if (
+            meta["vocab_size"] == args.vocab_size
+            and meta["max_seq_len"] == args.max_seq_len
+        ):
+            tokenizer_ok = True
+            print("✓ Loaded tokenizer from Hugging Face snapshot")
+
+    # --- Train if needed ---
+    if not tokenizer_ok:
+        print("Training tokenizer locally...")
+        train_tokenizer(train_files, args.vocab_size, tokenizer_path, args.max_seq_len)
+        print("✓ Tokenizer trained locally")
+
+        # Upload entire checkpoint folder
+        upload_folder(
+            repo_id=f"{username}/{args.model_name}",
+            repo_type="model",
+            folder_path=ckpt,
+        )
+        print("✓ Uploaded tokenizer snapshot to Hugging Face")
+
+    # --- Example usage ---
+    gen = token_sequence_generator(train_files, tokenizer_path, args.max_seq_len)
     for i, seq in enumerate(gen):
         if i == 5:
             break
         print(len(seq))
+
+
+# =========================
+# Streaming token packer
+# =========================
+
+
+def token_sequence_generator(files, tokenizer_path, seq_len, eos_token="<|endoftext|>"):
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    eos_id = tokenizer.token_to_id(eos_token)
+
+    buffer = []
+
+    for chunk in stream_text(files):
+        encs = tokenizer.encode_batch(chunk)
+        for e in encs:
+            buffer.extend(e.ids)
+            buffer.append(eos_id)
+            while len(buffer) >= seq_len + 1:
+                seq = buffer[: seq_len + 1]
+                buffer = buffer[seq_len:]
+                yield seq
 
 
 if __name__ == "__main__":
