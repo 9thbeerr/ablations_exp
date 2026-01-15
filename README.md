@@ -1,15 +1,6 @@
 # Ablations
 
-A minimal LLM training framework for running ablation experiments. Based on CS336 scaffolding.
-
-## Features
-
-- Custom transformer model implementation with RoPE embeddings
-- BPE tokenizer training
-- Support for multiple datasets: TinyStories, FineWeb-Edu, Synthetic, and Image data
-- Gradient checkpointing support
-- Weights & Biases integration for experiment tracking
-- Cosine learning rate scheduling with warmup
+Based on CS336 scaffolding to test run different research ideas.
 
 ## Requirements
 
