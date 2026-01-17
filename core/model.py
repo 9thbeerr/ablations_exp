@@ -1,4 +1,4 @@
-from sympy import false
+from torch.cuda import device
 from collections.abc import Iterable
 import math
 from typing import Any, Callable, Dict, Optional
@@ -7,6 +7,7 @@ import torch.nn as nn
 import numpy.typing as npt
 import numpy as np
 from torch.utils.checkpoint import checkpoint
+import torch.nn.functional as F
 
 
 class Linear(nn.Module):
@@ -205,7 +206,12 @@ class MHA(nn.Module):
 
 class MHARope(nn.Module):
     def __init__(
-        self, d_model: int, num_heads: int, rope: nn.Module, device="cpu"
+        self,
+        d_model: int,
+        num_heads: int,
+        rope: nn.Module,
+        layer_idx: int,
+        device="cpu",
     ) -> torch.Tensor:
         super().__init__()
 
@@ -218,11 +224,14 @@ class MHARope(nn.Module):
         self.q_proj = Linear(d_model, d_model, device=self.device)
         self.k_proj = Linear(d_model, d_model, device=self.device)
         self.v_proj = Linear(d_model, d_model, device=self.device)
+        self.layer_idx = layer_idx
         self.output_proj = Linear(d_model, d_model, device=self.device)
 
         self.rope = rope
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, token_positions: torch.Tensor, former_layer_values
+    ) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
 
         Q = (
@@ -241,6 +250,17 @@ class MHARope(nn.Module):
             .transpose(1, 2)
         )
 
+        if self.layer_idx == 0:
+            if former_layer_values is None:
+                former_layer_values = V.detach()
+            value_states = V
+        else:
+            if former_layer_values is None:
+                # fallback: behave normally if layer-0 not run yet
+                value_states = V
+            else:
+                value_states = 0.5 * former_layer_values + 0.5 * V
+
         # Q.to(self.device)
         # K.to(self.device)
         # V.to(self.device)
@@ -254,18 +274,25 @@ class MHARope(nn.Module):
         mask = torch.tril(torch.ones(queries_shape, keys_shape)).unsqueeze(0)
         mask = mask.bool()
 
-        attention = scaled_dot_product_attention(Q, K, V, mask)
+        attention = scaled_dot_product_attention(Q, K, value_states, mask)
 
         attention = attention.transpose(1, 2).reshape(batch_size, seq_len, self.d_model)
 
         output = self.output_proj(attention)
 
-        return output
+        return output, former_layer_values
 
 
 class TransformerBlock(nn.Module):
     def __init__(
-        self, d_model: int, num_heads: int, d_ff: int, rope: nn.Module, device="cpu"
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        rope: nn.Module,
+        layer_idx: int,
+        context_length: int,
+        device="cpu",
     ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -273,23 +300,33 @@ class TransformerBlock(nn.Module):
         self.d_ff = d_ff
         self.d_k = d_model // self.num_heads
 
-        self.attn = MHARope(self.d_model, self.num_heads, rope, device)
+        self.attn = MHARope(
+            self.d_model,
+            self.num_heads,
+            rope,
+            layer_idx=layer_idx,
+            device=device,
+        )
         self.ffn = FeedForwardNet(d_model, d_ff, device=device)
         self.ln1 = RMSNorm(d_model, device=device)
         self.ln2 = RMSNorm(d_model, device=device)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.mhc = GroupedmHC(self.d_model, group_size=4, device=device)
+
+    def forward(self, x: torch.Tensor, former_layer_values):
         token_positions = torch.arange(0, x.shape[-2])
 
         y = self.ln1(x)
-        y = self.attn(y, token_positions)
+        y, former_layer_values = self.attn(y, token_positions, former_layer_values)
         x = x + y
 
         y = self.ln2(x)
         y = self.ffn(y)
         y = x + y
 
-        return y
+        y = self.mhc(x, y)
+
+        return y, former_layer_values
 
 
 class TransformerLM(nn.Module):
@@ -316,21 +353,32 @@ class TransformerLM(nn.Module):
 
         self.layers = nn.ModuleList(
             [
-                TransformerBlock(d_model, num_heads, d_ff, rope, device=device)
-                for _ in range(num_layers)
+                TransformerBlock(
+                    d_model,
+                    num_heads,
+                    d_ff,
+                    rope,
+                    layer_idx=layer_idx,
+                    device=device,
+                    context_length=context_length,
+                )  # ty:ignore[missing-argument]
+                for layer_idx in range(num_layers)
             ]
         )
 
         self.use_gradient_checkpoint = use_gradient_checkpoint
 
     def forward(self, x: torch.IntTensor) -> torch.FloatTensor:
+        former_layer_values = None
         output = self.token_embeddings(x)
 
         for layer in self.layers:
             if self.use_gradient_checkpoint and self.training:
-                output = checkpoint(layer, output, use_reentrant=False)
+                output, former_layer_values = checkpoint(
+                    layer, output, former_layer_values, use_reentrant=False
+                )
             else:
-                output = layer(output)
+                output, former_layer_values = layer(output, former_layer_values)
 
         output = self.ln_final(output)
 
@@ -557,3 +605,91 @@ def load_checkpoint(src, model: torch.nn.Module, optimizer: torch.optim.Optimize
     iterations = model_state["iteration"]
 
     return iterations
+
+
+class GroupedmHC(nn.Module):
+    """
+    Vectorized grouped mHC for language models.
+    Matches paper: group size n=4, per-token channel grouping.
+    No Python loops over groups.
+    """
+
+    def __init__(
+        self, d_model, group_size=4, sinkhorn_iters=5, device=None, dtype=None
+    ):
+        super().__init__()
+        assert d_model % group_size == 0
+
+        self.d_model = d_model
+        self.group_size = group_size
+        self.num_groups = d_model // group_size
+        self.sinkhorn_iters = sinkhorn_iters
+
+        g = group_size
+        G = self.num_groups
+
+        # RMSNorm over last dim = group_size
+        self.rmsnorm = RMSNorm(g, device=device, dtype=dtype)
+
+        # φ parameters grouped
+        # shapes:
+        # phi_pre  : [G, g, g]
+        # phi_post : [G, g, g]
+        # phi_res  : [G, g, g*g]
+
+        self.phi_pre = nn.Parameter(
+            torch.randn(G, g, g, device=device, dtype=dtype) * 0.02
+        )
+        self.phi_post = nn.Parameter(
+            torch.randn(G, g, g, device=device, dtype=dtype) * 0.02
+        )
+        self.phi_res = nn.Parameter(
+            torch.randn(G, g, g * g, device=device, dtype=dtype) * 0.02
+        )
+
+    def sinkhorn(self, H):
+        # H : [..., g, g]
+        M = torch.exp(H)
+        for _ in range(self.sinkhorn_iters):
+            M = M / (M.sum(dim=-1, keepdim=True) + 1e-9)
+            M = M / (M.sum(dim=-2, keepdim=True) + 1e-9)
+        return M
+
+    def forward(self, x, f_out):
+        """
+        x, f_out : [B, S, D]
+        """
+
+        B, S, D = x.shape
+        G = self.num_groups
+        g = self.group_size
+
+        # reshape into groups: [B,S,G,g]
+        x = x.view(B, S, G, g)
+        f_out = f_out.view(B, S, G, g)
+
+        # RMSNorm per group
+        x_norm = self.rmsnorm(x)
+
+        # ---- φ projections (eq.7) ----
+        # einsum: [B,S,G,g] × [G,g,g] → [B,S,G,g]
+        Hpre_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_pre)
+        Hpost_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_post)
+
+        # [B,S,G,g] × [G,g,g*g] → [B,S,G,g*g]
+        Hres_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_res)
+
+        # ---- constraints (eq.8) ----
+        H_pre = torch.sigmoid(Hpre_t)
+        H_post = 2 * torch.sigmoid(Hpost_t)
+
+        H_res = Hres_t.view(B, S, G, g, g)
+        H_res = self.sinkhorn(H_res)
+
+        # ---- apply hyper-connection (eq.6) ----
+        residual = torch.einsum("bsgij,bsgj->bsgi", H_res, x)
+        cross = H_post * f_out
+
+        out = residual + cross
+
+        return out.view(B, S, D)
