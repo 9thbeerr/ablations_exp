@@ -1,7 +1,7 @@
 from torch.cuda import device
 from collections.abc import Iterable
 import math
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import numpy.typing as npt
@@ -87,7 +87,7 @@ class FeedForwardNet(nn.Module):
         self.w3 = Linear(d_model, d_ff, device=device)
 
     def forward(self, x: torch.Tensor):
-        l1 = self.w1(x)
+        l1: Unknown = self.w1(x)
         silu = torch.sigmoid(l1) * l1
         l3 = self.w3(x)
         glu = silu * l3
@@ -212,6 +212,7 @@ class MHARope(nn.Module):
         rope: nn.Module,
         layer_idx: int,
         device="cpu",
+        ablation_config={},
     ) -> torch.Tensor:
         super().__init__()
 
@@ -226,12 +227,12 @@ class MHARope(nn.Module):
         self.v_proj = Linear(d_model, d_model, device=self.device)
         self.layer_idx = layer_idx
         self.output_proj = Linear(d_model, d_model, device=self.device)
-
+        self.ablation_config = ablation_config
         self.rope = rope
 
     def forward(
         self, x: torch.Tensor, token_positions: torch.Tensor, former_layer_values
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = x.shape
 
         Q = (
@@ -250,16 +251,17 @@ class MHARope(nn.Module):
             .transpose(1, 2)
         )
 
-        if self.layer_idx == 0:
-            if former_layer_values is None:
-                former_layer_values = V.detach()
-            value_states = V
-        else:
-            if former_layer_values is None:
-                # fallback: behave normally if layer-0 not run yet
+        if self.ablation_config["value_residual"]:
+            if self.layer_idx == 0:
+                if former_layer_values is None:
+                    former_layer_values = V.detach()
                 value_states = V
             else:
-                value_states = 0.5 * former_layer_values + 0.5 * V
+                if former_layer_values is None:
+                    # fallback: behave normally if layer-0 not run yet
+                    value_states = V
+                else:
+                    value_states = 0.5 * former_layer_values + 0.5 * V
 
         # Q.to(self.device)
         # K.to(self.device)
@@ -274,13 +276,17 @@ class MHARope(nn.Module):
         mask = torch.tril(torch.ones(queries_shape, keys_shape)).unsqueeze(0)
         mask = mask.bool()
 
-        attention = scaled_dot_product_attention(Q, K, value_states, mask)
+        if self.ablation_config["value_residual"]:
+            ## For value residual:
+            attention = scaled_dot_product_attention(Q, K, value_states, mask)
+        else:
+            attention = scaled_dot_product_attention(Q, K, V, mask)
 
         attention = attention.transpose(1, 2).reshape(batch_size, seq_len, self.d_model)
 
         output = self.output_proj(attention)
 
-        return output, former_layer_values
+        return (output, former_layer_values)
 
 
 class TransformerBlock(nn.Module):
@@ -293,6 +299,7 @@ class TransformerBlock(nn.Module):
         layer_idx: int,
         context_length: int,
         device="cpu",
+        ablation_config={},
     ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -300,18 +307,22 @@ class TransformerBlock(nn.Module):
         self.d_ff = d_ff
         self.d_k = d_model // self.num_heads
 
+        self.ablation_config = ablation_config
+
         self.attn = MHARope(
             self.d_model,
             self.num_heads,
             rope,
             layer_idx=layer_idx,
             device=device,
+            ablation_config=self.ablation_config,
         )
         self.ffn = FeedForwardNet(d_model, d_ff, device=device)
         self.ln1 = RMSNorm(d_model, device=device)
         self.ln2 = RMSNorm(d_model, device=device)
 
-        self.mhc = GroupedmHC(self.d_model, group_size=4, device=device)
+        if self.ablation_config["mHC"]:
+            self.mhc = GroupedmHC(self.d_model, group_size=4, device=device)
 
     def forward(self, x: torch.Tensor, former_layer_values):
         token_positions = torch.arange(0, x.shape[-2])
@@ -324,7 +335,8 @@ class TransformerBlock(nn.Module):
         y = self.ffn(y)
         y = x + y
 
-        y = self.mhc(x, y)
+        if self.ablation_config["mHC"]:
+            y = self.mhc(x, y)
 
         return y, former_layer_values
 
@@ -341,12 +353,14 @@ class TransformerLM(nn.Module):
         rope_theta: float,
         device="cpu",
         use_gradient_checkpoint: bool = False,
+        ablation_config={},
     ) -> None:
         super().__init__()
 
         self.token_embeddings = Embedding(vocab_size, d_model, device=device)
         self.lm_head = Linear(d_model, vocab_size, device=device)
         self.ln_final = RMSNorm(d_model, device=device)
+        self.ablation_config = ablation_config
 
         dk = d_model // num_heads
         rope = RotaryPositionalEmbedding(rope_theta, dk, context_length, device=device)
@@ -361,6 +375,7 @@ class TransformerLM(nn.Module):
                     layer_idx=layer_idx,
                     device=device,
                     context_length=context_length,
+                    ablation_config=self.ablation_config,
                 )  # ty:ignore[missing-argument]
                 for layer_idx in range(num_layers)
             ]
@@ -609,16 +624,17 @@ def load_checkpoint(src, model: torch.nn.Module, optimizer: torch.optim.Optimize
 
 class GroupedmHC(nn.Module):
     """
-    Vectorized grouped mHC for language models.
-    Matches paper: group size n=4, per-token channel grouping.
-    No Python loops over groups.
+    Vectorized grouped mHC matching DeepSeek paper exactly.
+    Implements equations 7, 8, and 6 with full affine transformations.
     """
 
     def __init__(
         self, d_model, group_size=4, sinkhorn_iters=5, device=None, dtype=None
     ):
         super().__init__()
-        assert d_model % group_size == 0
+        assert d_model % group_size == 0, (
+            f"d_model ({d_model}) must be divisible by group_size ({group_size})"
+        )
 
         self.d_model = d_model
         self.group_size = group_size
@@ -631,12 +647,7 @@ class GroupedmHC(nn.Module):
         # RMSNorm over last dim = group_size
         self.rmsnorm = RMSNorm(g, device=device, dtype=dtype)
 
-        # φ parameters grouped
-        # shapes:
-        # phi_pre  : [G, g, g]
-        # phi_post : [G, g, g]
-        # phi_res  : [G, g, g*g]
-
+        # ---- φ projection parameters (eq.7) ----
         self.phi_pre = nn.Parameter(
             torch.randn(G, g, g, device=device, dtype=dtype) * 0.02
         )
@@ -647,49 +658,87 @@ class GroupedmHC(nn.Module):
             torch.randn(G, g, g * g, device=device, dtype=dtype) * 0.02
         )
 
+        # ---- α scale parameters (eq.7) ----
+        self.alpha_pre = nn.Parameter(torch.ones(G, g, device=device, dtype=dtype))
+        self.alpha_post = nn.Parameter(torch.ones(G, g, device=device, dtype=dtype))
+        self.alpha_res = nn.Parameter(torch.ones(G, g, g, device=device, dtype=dtype))
+
+        # ---- b bias parameters (eq.7) ----
+        self.b_pre = nn.Parameter(torch.zeros(G, g, device=device, dtype=dtype))
+        self.b_post = nn.Parameter(torch.zeros(G, g, device=device, dtype=dtype))
+        self.b_res = nn.Parameter(torch.zeros(G, g, g, device=device, dtype=dtype))
+
     def sinkhorn(self, H):
-        # H : [..., g, g]
+        """
+        Sinkhorn-Knopp algorithm for doubly stochastic matrix (eq.9).
+        H : [..., g, g]
+        Returns: [..., g, g] where rows and columns sum to 1
+        """
         M = torch.exp(H)
         for _ in range(self.sinkhorn_iters):
+            # T_r: row normalization
             M = M / (M.sum(dim=-1, keepdim=True) + 1e-9)
+            # T_c: column normalization
             M = M / (M.sum(dim=-2, keepdim=True) + 1e-9)
         return M
 
     def forward(self, x, f_out):
         """
-        x, f_out : [B, S, D]
-        """
+        Apply manifold-constrained hyper-connections.
 
+        Args:
+            x: Input tensor [B, S, D]
+            f_out: Feed-forward output [B, S, D]
+
+        Returns:
+            Output tensor [B, S, D]
+        """
         B, S, D = x.shape
         G = self.num_groups
         g = self.group_size
 
-        # reshape into groups: [B,S,G,g]
+        # Reshape into groups: [B, S, G, g]
         x = x.view(B, S, G, g)
         f_out = f_out.view(B, S, G, g)
 
         # RMSNorm per group
         x_norm = self.rmsnorm(x)
 
-        # ---- φ projections (eq.7) ----
-        # einsum: [B,S,G,g] × [G,g,g] → [B,S,G,g]
-        Hpre_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_pre)
-        Hpost_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_post)
+        # ---- Dynamic mappings with affine transformations (eq.7) ----
+        # H_pre: [B,S,G,g] × [G,g,g] → [B,S,G,g]
+        proj_pre = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_pre)
+        Hpre_t = self.alpha_pre * proj_pre + self.b_pre
 
-        # [B,S,G,g] × [G,g,g*g] → [B,S,G,g*g]
-        Hres_t = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_res)
+        # H_post: [B,S,G,g] × [G,g,g] → [B,S,G,g]
+        proj_post = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_post)
+        Hpost_t = self.alpha_post * proj_post + self.b_post
 
-        # ---- constraints (eq.8) ----
+        # H_res: [B,S,G,g] × [G,g,g*g] → [B,S,G,g*g] → [B,S,G,g,g]
+        proj_res = torch.einsum("bsgj,gjk->bsgk", x_norm, self.phi_res)
+        proj_res = proj_res.view(B, S, G, g, g)
+        Hres_t = self.alpha_res * proj_res + self.b_res
+
+        # ---- Apply constraints (eq.8) ----
+        # H_pre: [0, 1] via sigmoid - gating
         H_pre = torch.sigmoid(Hpre_t)
+
+        # H_post: [-1, 1] via 2σ(·) - modulation
         H_post = 2 * torch.sigmoid(Hpost_t)
 
-        H_res = Hres_t.view(B, S, G, g, g)
-        H_res = self.sinkhorn(H_res)
+        # H_res: doubly stochastic via Sinkhorn-Knopp - mixing
+        H_res = self.sinkhorn(Hres_t)
 
-        # ---- apply hyper-connection (eq.6) ----
-        residual = torch.einsum("bsgij,bsgj->bsgi", H_res, x)
+        # ---- Apply hyper-connection (eq.6) ----
+        # Gate the input
+        gated_input = H_pre * x
+
+        # Residual path: mix features within groups
+        residual = torch.einsum("bsgij,bsgj->bsgi", H_res, gated_input)
+
+        # Cross path: modulate FFN output
         cross = H_post * f_out
 
+        # Combine
         out = residual + cross
 
         return out.view(B, S, D)

@@ -1,3 +1,4 @@
+import json
 import enum
 import sys
 import signal
@@ -16,7 +17,9 @@ from core.model import (
     learning_rate_schedule,
     load_checkpoint,
     save_checkpoint,
+    GroupedmHC,
 )
+from torch.optim import Muon
 from pathlib import Path
 
 import wandb
@@ -61,6 +64,10 @@ def get_args():
     parser.add_argument("--mode", type=str, default="valid")
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--device", type=str, required=True, default="mps")
+
+    parser.add_argument(
+        "--ablation_config", type=json.loads, required=True, default="{}"
+    )
 
     resume_group = parser.add_argument_group("Resume Training Options")
     resume_group.add_argument(
@@ -160,6 +167,8 @@ if __name__ == "__main__":
         "max_l2_norm": args.max_l2_norm,
     }
 
+    ablation_config = args.ablation_config
+
     train_files = [
         f
         for f in (raw_data_dir / "train").rglob("*")
@@ -176,13 +185,12 @@ if __name__ == "__main__":
     ]
 
     print(
-        f"Model Name: {model_name},\nRoot: {root_path},\nMode: {mode},\nDatasets: {train_files + valid_files},\nCheckpoint_path: {current_checkpoints}, \nWandb ID: {run_id}"
+        f"Model Name: {model_name},\nRoot: {root_path},\nMode: {mode},\nDatasets: {train_files + valid_files},\nCheckpoint_path: {current_checkpoints}, \nWandb ID: {run_id}, \nAblation Config: {ablation_config}"
     )
 
-    # tokenized_data = np.memmap(str(train_dataset_path), dtype=np.int64, mode="r")
-
-    model = TransformerLM(**model_config)
+    model = TransformerLM(**model_config, ablation_config=ablation_config)
     model = torch.compile(model, backend="aot_eager")
+
     optimizer = AdamW(
         params=model.parameters(),
         lr=args.lr,
@@ -280,6 +288,7 @@ if __name__ == "__main__":
         )
 
         optimizer.step()
+
         lr = learning_rate_schedule(
             step,
             lr_max=args.lr_max,
@@ -347,9 +356,10 @@ if __name__ == "__main__":
 
             model.train()
 
-        if step % 1000 == 0:
+        if step % 10 == 0:
             print("Saving Checkpoint at step:", step)
             try:
+                # need to save both optimizer states.. too many things to do for both ooptimzers.
                 save_checkpoint(
                     model,
                     optimizer,

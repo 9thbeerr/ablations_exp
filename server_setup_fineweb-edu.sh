@@ -38,7 +38,7 @@ MODE=train
 DEVICE=mps
 WANDB_RUN_ID=""
 NUM_WORKERS=$(python3 -c "import os; print(max(1, int(os.cpu_count() * 0.6)))")
-
+ABLATION_CONFIG='{"mHC": true, "value_residual": false}'
 # Functions
 setup() {
     pip install uv
@@ -96,6 +96,7 @@ train_model() {
         --mode "$MODE" \
         --model_name "$MODEL_NAME" \
         --device "$DEVICE" \
+        --ablation_config "$ABLATION_CONFIG" \
         $RESUME
 }
 
